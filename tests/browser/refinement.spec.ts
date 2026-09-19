@@ -89,6 +89,24 @@ for (const width of [375, 768, 1440])
       await page.goto(path);
       await expect(page.locator("h1")).toBeVisible();
       await expect(page.locator(".loading")).toHaveCount(0);
+      if (width <= 768 && path.includes("demo_candidate-choice")) {
+        const weight = page.locator(".comparison-row").filter({
+          has: page.getByRole("heading", {
+            name: "Gross weight (kg)",
+            exact: true,
+          }),
+        });
+        await weight.locator("summary").last().click();
+        const sources = page
+          .locator(".review-sources a, .document-item a, .evidence a")
+          .filter({ visible: true });
+        expect(await sources.count()).toBeGreaterThan(0);
+        for (const source of await sources.all()) {
+          const box = await source.boundingBox();
+          expect(box?.height).toBeGreaterThanOrEqual(44);
+          expect(box?.width).toBeGreaterThanOrEqual(44);
+        }
+      }
       expect(
         await page.evaluate(
           () => document.documentElement.scrollWidth <= innerWidth,

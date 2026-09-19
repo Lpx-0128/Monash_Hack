@@ -1720,3 +1720,28 @@ pre {
 .review-actions .notice {
   margin: 16px 0;
 }
+
+/* Sources are primary review actions: keep them easy to tap on small screens. */
+@media (max-width: 900px) {
+  .review-sources a,
+  .document-item a,
+  .evidence a {
+    display: flex;
+    align-items: center;
+    min-height: 44px;
+    padding: 8px 0;
+    overflow-wrap: anywhere;
+    font-size: 12px;
+  }
+  .field-value summary,
+  .document-item summary {
+    min-height: 44px;
+    padding: 12px 0;
+  }
+  .field-value > small,
+  .provenance,
+  .evidence small,
+  .comparison-row summary {
+    font-size: 12px;
+  }
+}

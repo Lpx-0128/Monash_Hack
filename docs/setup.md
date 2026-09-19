@@ -2,6 +2,8 @@
 
 Current local simulator, dashboard, Telegram and optional Copilot setup. For verification boundaries see [verification](verification.md).
 
+For a presentation, use the [four-minute rehearsal](#four-minute-judge-rehearsal) and [backup-recording plan](#backup-recording-plan). These prepare a simulator demonstration; they do not replace PRD 2's final real-integration gate.
+
 ## Run
 
 Requires Node **22.12+** and npm. From this repository:
@@ -210,3 +212,82 @@ docker run --rm -p 5173:5173 harbor-review-f0
 ```
 
 Use a single always-running instance with a persistent writable state directory (the simulator does not coordinate multiple processes), port 5173, health route `/health`, readiness route `/ready`, and HTTPS at the hosting edge. Set `COOKIE_SECURE=true` for HTTPS. Do not deploy only `dist/` to a static host: the demo requires its Node API. Docker execution itself requires a local Docker daemon and is reported separately from the verified Node build.
+
+## Four-minute judge rehearsal
+
+**Internal rehearsal label:** “Synthetic cases; simulated extraction, grounding and processing. Telegram transport and optional Copilot interpretation are real when enabled.” Keep that distinction visible and say it aloud. Final submission must replace the simulated core with approved real processing and repeat this rehearsal.
+
+Preparation, before the clock starts:
+
+1. Browser-only: `npm run build`, then `npm start`; use http://localhost:5173. This isolated guest session does not send Telegram messages. For the Telegram variant, start the three configured components above and use http://localhost:5176 instead; this demo shares state with the paired bot.
+2. Check `/health` and `/ready`; open the dashboard. Confirm the synthetic notice and normal connection mode. Close private tabs, terminals, configuration files and notification previews before screen sharing.
+3. Use **Demo controls → Reset demo** for a clean rehearsal session, or open `demo_grounded-input` and **Replay / Reprocess** to reset only that case. Wait for its new OPEN review (replay normally takes eight seconds). Never reuse a preview or Telegram message from an earlier run. Reset on 5176 affects both the shared dashboard and bot; coordinate with other testers first.
+4. Main fixture: **Source available · enter BL gross weight** (`demo_grounded-input`), source-supported BL weight **21707 kg**. Optional contrast: **Container quantity differs** (`demo_mismatch`) or **Missing draft BL · external action** (`demo_blocked-open`). Do not choose a missing-weight fixture expecting document-confirmed success: unsupported values require explicit override.
+
+### Browser-only route (approximately 4 minutes)
+
+| Time | Action and brief narration | Expected visible result | Recovery |
+| --- | --- | --- | --- |
+| 0:00–0:30 | Show overview. “A coordinator checks a draft BL against the shipping instructions. We surface uncertainty and discrepancies instead of asking them to monitor every step.” State the simulator label. | Distinct pending decisions, failures and operational/machine outcomes; synthetic banner remains visible. | If offline, use the labelled backup; do not describe stale data as current. |
+| 0:30–1:00 | Select **Needs input**, then **Source available · enter BL gross weight**. | Correct case, OPEN BL weight review, current run and original Needs review assessment. | Search the exact title, or use All cases. If already closed, replay and wait for the new review before restarting the take. |
+| 1:00–2:00 | In Gross weight, expand SI and BL evidence. Open the BL source, read its weight line and return to the case. “The value must be supported by the source, not just guessed.” | SI raw `21,707 KG`, BL raw `21707.00 kgs`, normalized 21707, explicit provenance and exact source quote. | If document access fails, stop the decision step; retry authorized access or use the backup. Do not submit an unchecked value. |
+| 2:00–2:40 | Enter `21707`, **Preview value**, read BL/field/kg and proposed value, then **Confirm submission**. | No submission before confirmation; acceptance shows Processing and previous result updating. | Invalid input: correct the format. Stale review: refetch/open the new review. Uncertain response: refetch decision status; never click through old confirmations or automatically resend. |
+| 2:40–3:20 | Wait for natural polling (normally four-second worker plus up to three-second poll). Show the result and history. “Accepted means queued, not finished. Human resolution updates the operational result without rewriting the automated assessment.” | Completed, operational OK, Human document-confirmed/Grounded, original machine Needs review; received/applied history. | If processing fails, show retained acceptance and operator recovery. Do not claim completion. Advance processing is a labelled simulator shortcut only, not evidence of real worker speed. |
+| 3:20–4:00 | Open **Container quantity differs** to contrast a known mismatch. Close with “A completed check can still require a corrected document.” | Completed Mismatch with correction-required follow-up, not an invented approval review. | Use the main completed case if time is short; explain the distinction without claiming an unshown action occurred. |
+
+### Telegram variant (approximately 4–5 minutes)
+
+Use this instead of the browser input segment, not as a second full presentation. The operator must already have paired and explicitly approved the presenter's own private test account using `f2_setup.py approve`. There is no automatic judge enrollment or invitation flow. Use exactly one gateway per bot token and preserve its ignored routing state.
+
+- **0:00–0:40:** show the shared dashboard/problem and disclose simulation. Send `/reviews` in the authorized bot; select the current **Source available** case. If its notice was already delivered, `/reviews` can reopen it. Large queues remain selectable; do not promise a message flood.
+- **0:40–1:40:** inspect the attached BL or **View details**. Use Telegram **Reply on the review message itself**, type `21707`. Optional F3 alternative: the written-out weight sentence above, explicitly described as real Copilot reply interpretation, not AI extraction.
+- **1:40–2:40:** read the preview, click **Confirm value**, show accepted/processing and wait for the resulting bot notice. If grounding rejects a value, do not silently override: inspect the source, cancel/change, or explicitly demonstrate the separate ungrounded override flow.
+- **2:40–4:00:** open the same case on the shared dashboard; show operational OK, unchanged machine Needs review and TELEGRAM history. Explain that `/pause` stops proactive notifications, while existing review buttons remain usable.
+- **Recovery:** if Telegram is unavailable, say so and switch to the browser route. Refetch a possibly accepted decision before retrying. Localhost links work only on the presenting laptop; copy the address into its browser if Telegram does not link it. Do not claim phone access without a hosted HTTPS address and a separate device check.
+
+### Troubleshooting and integration configuration
+
+| Symptom | Check / supported recovery |
+| --- | --- |
+| Blank production page after cleanup | Run `npm run build` before `npm start`; `dist/` is generated. Use `npm run dev` for hot reload. |
+| Address already in use | Keep one service per configured port. Inspect the existing terminal; do not start duplicate gateways or blindly kill unrelated processes. |
+| No private `/start` observed during pairing | Keep the dedicated gateway running and send `/start` again. Approve your own observed account locally; do not paste tokens into chat. |
+| No proactive messages | Check `/pause` state, then `/reviews`, the queue, gateway connectivity and authorized recipient configuration. A large backlog is intentionally held until selected. |
+| Reply not understood / no case selected | Reply to the original current review, not its details or a generic message. Try a canonical value or buttons if Copilot is unavailable. |
+| Review replaced or already handled | Refresh/reopen the current case. Do not migrate an earlier proposal or confirmation. |
+| Grounding rejection | The review remains open. Recheck the source; a manual override requires explicit exact confirmation and remains human-provided/ungrounded. |
+| Lost response or failed resumption | Refetch authoritative state; accepted input is retained. Do not re-enter it as recovery. Use an operator recovery procedure when the real backend is available. |
+
+Simulator launch commands always use the Node synthetic service. `VITE_API_MODE=live` and `VITE_API_BASE=/api/v1` select the frontend adapter at build time; they do not turn this server into PRD 1 or establish trusted live identity. Real deployment needs an authenticated same-origin gateway, approved DEMO cases/documents, trusted actor mapping and a real durable backend. Current live decision controls remain unavailable until that identity integration is supplied.
+
+Server-side placeholder settings for coordinated integration (never put secrets in `VITE_*`): `F2_BACKEND_URL=<approved-backend-url>`, `F2_BACKEND_TOKEN=<server-secret>`, `F2_DASHBOARD_URL=<public-https-dashboard>`, and explicitly authorized `F2_RECIPIENTS` / `F2_ACTORS`. Match the agreed real-backend authentication scheme before connecting; the current transport assertion is simulator-specific. See `.env.example` and the configuration section above. These real-deployment steps are **not verified** without the backend/hosting dependency.
+
+Unattended judge access is an **outstanding coordinated design dependency**, not an existing feature. PRD 2 §6.2 requires starting the bot and allowlisting/authentication; it permits a scoped safe dashboard guest but defines no automatic Telegram approval, invitation endpoint or isolated per-judge shared-bot session scheme. Agree ownership, invitation lifetime/revocation, actor binding, session isolation/reset, rate limits and DEMO document scope before implementing any extension. Retain the current allowlist meanwhile.
+
+## Backup-recording plan
+
+The storyboard follows the browser script; record the Telegram variant only with an authorized account and a working gateway. Target a continuous 3–5 minute take at 1440×900 or another readable landscape size; inspect at phone width separately. No final video is produced or certified by this plan.
+
+| Segment | Screen / capture | Evidence to retain |
+| --- | --- | --- |
+| Opening (30 seconds) | Overview and synthetic label for rehearsal, or correctly labelled approved real environment for final take | Environment/build identifier and presenter statement of what is real |
+| Find case (30 seconds) | Needs input → exact case | Current case/run, OPEN review and question |
+| Inspect (60 seconds) | SI/BL comparison → BL source → return | Source quote, normalized value, document provenance; no private EVAL data |
+| Decide (40 seconds) | Enter value → preview → confirm | Exact target/value and explicit human action; optional Telegram reply/preview instead |
+| Observe (40 seconds) | Uncut acceptance → processing → result → history | Do not splice away a failure or replace processing with an unrelated completed fixture |
+| Explain follow-up (40 seconds) | Known mismatch or external-block example | Completion versus correction/external work; honest boundary statement |
+
+Before recording, reset/replay through the supported UI, wait for the new review, verify normal fault mode and source access, and hide unrelated browser tabs/chat lists, OS notifications, terminals, account IDs, device-login codes, `.env` and `.local` files. Capture the app window or bot conversation pane, not the full desktop. Use only explicitly demo-safe documents. Do not record BotFather, authorization setup or credential entry.
+
+Keep an unedited master take and record the commit, environment, case/run IDs, date, actual provider usage and observed outcome in release notes. A short edited presentation may improve pacing but must not substitute for the continuous workflow evidence. If real services fail, stop and retain the failed take for investigation; use the clearly labelled simulator recording only for internal rehearsal. It does not satisfy the final real-integration requirement.
+
+Final recording checklist:
+
+- [ ] Approved real backend, deployment and trusted actor/document access verified; meaningful real AI processing evidence from PRD 1 available.
+- [ ] Fresh approved DEMO case; correct source, review and run; resets/replays exercised against the real pipeline.
+- [ ] Browser route rehearsed end to end on the final build; Telegram route verified or transparently omitted with its dependency stated.
+- [ ] No credentials, private messages, EVAL data or misleading synthetic/real labels in any frame.
+- [ ] Preview, explicit confirmation, acceptance and resulting state are visible; original machine assessment remains distinguishable.
+- [ ] Audio, text size, playback, captions if used and duration checked; complete unedited backup saved.
+- [ ] Video, public prototype, repository and submission links opened in a clean unauthenticated browser where intended; owners/access confirmed.
+- [ ] Final release evidence and limitations updated; no all-F4-complete claim while any required real integration, final rehearsal or recording remains open.

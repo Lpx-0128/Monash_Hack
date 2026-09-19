@@ -6,6 +6,7 @@ Shipping-document review dashboard, stateful synthetic Node API, Hermes Telegram
 
 - [Setup and walkthrough](docs/setup.md): dashboard, bot pairing, three-service startup, Copilot, recovery and deployment configuration.
 - [Verification and status](docs/verification.md): acceptance requirements, actual tests/live checks, known limits and outstanding gates.
+- [Judge rehearsal and backup-recording plan](docs/setup.md#four-minute-judge-rehearsal): browser/Telegram routes, recovery steps and final real-integration checklist.
 - [Shared contract](docs/shared-system-contract.md): authoritative wire/API requirements.
 - [PRD 1 — Backend](docs/prd-1-backend.md) and [PRD 2 — Interaction](docs/prd-2-interaction.md): team scope and acceptance.
 - [Design system](design-system/MASTER.md): interface conventions.

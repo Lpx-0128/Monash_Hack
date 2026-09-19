@@ -10,8 +10,27 @@ Current implementation: F0–F3 against a synthetic backend, with live Telegram 
 | F1 dashboard decisions | All review modes, exact overrides, sequencing, conflicts, uncertain responses and restart against simulator | Real backend and trusted live identity |
 | F2 Hermes / Telegram | Native pinned SDK tests and actual authorized Telegram journeys against simulator | Real-backend handshake; production transport reliability |
 | F3 interpretation | Actual Copilot proposals, strict validation, explicit confirmation and measured corpus | Real-backend pipeline visibility and acceptance |
+| F4 preparation | Responsive rehearsal, script, troubleshooting and backup-recording plan using available simulator | Final real-backend rehearsal, hosted prototype, actual final recording and submission link checks |
 
 No real extraction, general participant-document parsing, full dataset evaluation, private answer keys, production grounding accuracy or F4 completion is claimed. The shared adapter boundary exists; the real backend's authentication/actor assertion must be coordinated and tested rather than assuming the simulator's `X-Telegram-Actor` mechanism is supported.
+
+## F4 preparation — 20 September 2026
+
+Success conditions were defined before the rehearsal: a usable phone/tablet/desktop review, supported source access, exact preview/confirmation, distinct acceptance/result, recoverable unavailable/stale states, a rehearsed browser script, an honestly scoped Telegram route and a practical recording plan. Deliverables are maintained in [setup](setup.md#four-minute-judge-rehearsal) and its [recording section](setup.md#backup-recording-plan), not separate competing milestone copies.
+
+Environment inspection confirmed that both localhost previews use the synthetic Node backend; the Telegram backend setting points to loopback. The configured explicit Copilot model is `gpt-4.1`. No real backend endpoint or trusted live frontend identity is available. `/health` and `/ready` returned OK at both 5173 and 5176. Build/start instructions were exercised with the existing local services; no credentials were included in evidence.
+
+Manual browser rehearsal used the isolated 5173 session: overview → Needs input → `demo_grounded-input` → BL evidence → `21707` preview → explicit confirmation → Processing/updating → Completed, operational OK and Human document-confirmed/Grounded, with machine Needs review retained. The source link opened the actual synthetic BL and its `Gross Weight (KG): 21707.00 kgs` line. The script is budgeted for approximately four minutes; this was a step-by-step functional rehearsal, not a recorded/timed presenter take.
+
+Screenshots were inspected at 375×812, 768×1024 and 1440×900; keyboard overview navigation and visible focus were checked, and captured normal dashboard warning/error logs were empty. The phone inspection found source links with only 15–18 px height. The proportionate fix gives source links and related disclosures 44 px touch targets on screens up to 900 px and increases evidence/provenance metadata to 12 px. A final phone inspection measured the visible source link at 44 px, with no horizontal page overflow. Responsive browser assertions now protect these source targets at phone/tablet widths. The apricot design and contract behavior remain unchanged.
+
+The current live Telegram rehearsal reached `/reviews` → selectable backlog → the replayed `demo_grounded-input` review → SI/BL documents and source details → an explicit reply of `21707` → the correct BL/kg confirmation preview. The dashboard still showed an open review before confirmation, as required. Automated browser approval then blocked authenticated Telegram access because it could expose unrelated private chats; the final confirmation and outcome were **not verified in this F4 rehearsal**. No alternate transport was used to bypass that restriction. An authorized operator must finish the pending preview and verify the result, or replay the route; prior live F2/F3 evidence below remains separate from this partial rehearsal.
+
+`npm run check` passed all 67 application tests, TypeScript and the production build before the CSS-only fix. The initial complete browser suite passed 29/29; the final build and full browser regression also passed **29/29** (2.8 minutes), including the new 44 px source-target assertions at 375 and 768 px. These browser tests exercise candidate/document choices, supported values, exact overrides, escapes, sequential reviews, loading/empty/error states, lost responses, stale reviews, source opening, keyboard focus, reduced motion and responsive accessibility. Automated accessibility checks are not certification or a claim of physical-device testing.
+
+Preparation does not approve unattended judge onboarding. PRD 2 §6.2 still requires a started bot and allowlisted/authenticated identity; no invitation endpoint, automatic authorization or isolated judge/bot session scheme is defined. Those require a coordinated design and, where shared obligations change, A/B/C approval. The browser route works without bot enrollment; the shared Telegram simulator is not an isolated session for each judge.
+
+Once PRD 1 is ready, obtain approved real DEMO fixtures/source access, backend URL, trusted actor integration, durable review/resumption endpoints and actual AI-processing evidence. Then repeat browser/Telegram decisions and concurrency/recovery against that backend, verify the public HTTPS prototype and phone access, rehearse the final release continuously, produce/play back the unedited backup recording, and check all submission links. **All of F4 remains incomplete until these required real-integration and recording gates pass.**
 
 ## Acceptance requirements retained
 
@@ -67,7 +86,7 @@ The live loop found and fixed a leaked message ID that made outcomes appear alre
 - A crash after outbound send but before mapping persistence may duplicate a notification. Backend first-writer-wins prevents repeated decisions. A crash before inbound routing finishes may require a fresh explicit action; proposals never migrate to another review.
 - Individual delivery/marker attempts stop after five failures; source documents after three, with bounded backoff. More than three backlogged cases remain selectable instead of automatically draining. No exactly-once transport guarantee is claimed.
 - Optional Nous auxiliary-credential startup warnings do not mean Copilot is used implicitly: shipping inference explicitly selects Copilot. Credentials remain in ignored local files. Subscription availability/limits apply.
-- Phone usability, long-duration outages and live competing-poller recovery remain unverified. Container execution, hosted deployment and real-backend gates remain open.
+- Physical-phone usability, long-duration outages and live competing-poller recovery remain unverified. Responsive browser viewports were checked during F4 preparation. Container execution, hosted deployment and real-backend gates remain open.
 
 ## Participant reference and receipt-time adoption
 
