@@ -157,6 +157,31 @@ test("F2 grounded explicit reply, persisted preview, authenticated callback, 202
   assert.equal(c.resolution?.actor_id, "101");
   assert.equal(c.resolution?.final_status, "OK");
   assert.deepEqual(c.machine_assessment, before.machine_assessment);
+  await h.input({ text: "/reviews" });
+  await h.tick();
+  await h.tick();
+  const outcomes = () =>
+    h.transport.messages.filter(
+      (m) =>
+        m.text.includes("current workflow COMPLETED") &&
+        m.text.includes(before.case_id),
+    );
+  assert.equal(
+    outcomes().length,
+    1,
+    "settled outcome must actually be sent to Telegram",
+  );
+  assert.match(
+    outcomes()[0].text,
+    /operational OK; frozen machine NEEDS_REVIEW/,
+  );
+  h.restart();
+  await h.tick();
+  assert.equal(
+    outcomes().length,
+    1,
+    "restart must not duplicate delivered outcome",
+  );
   await h.click("Confirm value");
   assert.equal(
     (await h.api.get(before.case_id)).history.filter(
@@ -165,6 +190,47 @@ test("F2 grounded explicit reply, persisted preview, authenticated callback, 202
     1,
   );
 });
+test("F2 recovers legacy outcome message alias without repeating it after restart", async (t) => {
+  const h = await setup(t),
+    m = await h.review("grounded-input");
+  await h.input({ text: "21707", reply: m.id });
+  await h.click("Confirm value");
+  await h.advance();
+  const p = Object.values(h.engine.state.proposals).find(
+    (p) => p.phase === "done",
+  )!;
+  Object.assign(p, { message: m.id });
+  const key = `${p.run}/outcome/${p.review}/${p.actor}/${p.chat}`;
+  h.engine.state.deliveries[key] = {
+    ...p,
+    key,
+    type: "outcome",
+    message: m.id,
+    held: false,
+    attempts: 0,
+    due: 0,
+    documents: {},
+    documentAttempts: 0,
+    documentDue: 0,
+  };
+  h.engine.state.recipients = ["101/101"];
+  h.engine.save();
+  h.restart();
+  await h.tick();
+  await h.tick();
+  const outcomes = () =>
+    h.transport.messages.filter(
+      (m) =>
+        m.text.includes("current workflow COMPLETED") &&
+        m.text.includes(p.caseId),
+    );
+  assert.equal(outcomes().length, 1);
+  assert.notEqual(outcomes()[0].id, m.id);
+  h.restart();
+  await h.tick();
+  assert.equal(outcomes().length, 1);
+});
+
 test("F2 notification sends stop after bounded failures instead of flooding indefinitely", async (t) => {
   const h = await setup(t),
     api = new ReviewApi(h.base, secret, "101");

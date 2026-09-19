@@ -278,7 +278,9 @@ export function App({
           </strong>
           <p>
             {isSimulation
-              ? "Synthetic documents. Isolated demo session. No real shipments."
+              ? sharedTelegramDemo
+                ? "Synthetic documents. Shared Telegram demo. No real shipments."
+                : "Synthetic documents. Isolated demo session. No real shipments."
               : "Server-authorized cases only."}
           </p>
           <span className="contract-label">SHARED CONTRACT v2.1.1</span>
@@ -316,8 +318,9 @@ export function App({
               <strong>Simulation controls</strong>
               <p>
                 Seeded processing examples stay inspectable until advanced.
-                Replays finish after 8 seconds. Resets affect only this browser
-                session.
+                Replays finish after 8 seconds. {sharedTelegramDemo
+                  ? "Resets affect the shared dashboard and Telegram demo."
+                  : "Resets affect only this browser session."}
               </p>
             </div>
             <div className="control-row">

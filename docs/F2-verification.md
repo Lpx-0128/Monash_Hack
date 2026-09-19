@@ -9,15 +9,31 @@ Date: 19 September 2026. Branch: `feat/prd-2-interaction-frontend`. F1 checkpoin
 | Application logic + real simulator HTTP API | Verified by automated tests; Telegram transport double explicitly used |
 | Hermes native plugin registration + Telegram SDK | Verified against installed commit `44945d224c2ccd6e0a55f16223c7ab0dd39331bf`, package version 0.21.3; Telegram network mocked |
 | Restart and recovery | Application state reopened; native PTB gateway application recreated; queued update replay and duplicate suppression verified; simulator restart covered by retained F1 tests |
-| Live Hermes gateway + Telegram chat | **Partial**: gateway connected and initial outbound notices/documents reached the authorized chat. Full confirmed-decision handshake and live restart remain outstanding. See live finding below. |
+| Live Hermes gateway + Telegram chat | **Verified against simulator, 19–20 September**: authorized private chat, source delivery, sequential grounded decisions, override cancel/change, choices, external blocks, uncertain-response recovery, stale actions and pending-confirmation restart. Offline-before-receipt transport gap remains. |
 | Real backend | **Outstanding**: no backend URL/scoped credentials supplied; extraction/grounding accuracy not evaluated |
 | Hosted deployment / container execution | Prior external gates remain outstanding |
 
-Do not describe this as live F2 completion. The user is new to Telegram bots; [setup guide](F2-setup.md) supplies hidden-token setup and local ID approval without asking for secrets in chat.
+Live simulator verification is complete for the journeys listed below; this is not real-backend integration completion. The [setup guide](F2-setup.md) supplies hidden-token setup and local ID approval without asking for secrets in chat.
+
+## Live verification, 19–20 September 2026
+
+Used the isolated Codex in-app Telegram browser, the authorized private test bot, pinned Hermes gateway, application service, and shared simulator at `http://localhost:5176`. No participant data or unrelated chats were used. All decisions below were made through actual Telegram message replies/buttons.
+
+- `demo_both-sides`: replied 21707 to the SI review, confirmed, observed dashboard PROCESSING, received the subsequent BL review, then replied/confirmed 21707. Both values became DOCUMENT_CONFIRMED; operational OK and frozen machine NEEDS_REVIEW. Reusing the old confirmation was rejected.
+- `demo_field-input`: 23000 reached ordinary preview then grounding rejection. Cancelled its override, proposed 22000, and verified the old override button was rejected. Restarted both dedicated Hermes gateway and application with the new exact override pending; the original button successfully applied 22000 once. Dashboard and Telegram report MANUAL_OVERRIDE, ungrounded, MISMATCH and CORRECTION_REQUIRED.
+- `demo_candidate-choice`: selected the evidenced 21707 candidate; completed with operational OK. `demo_document-choice`: assigned the explicitly requested BL role; completed with operational OK.
+- `demo_blocked-open`: acknowledged external action; review closed while workflow remained BLOCKED_EXTERNAL. `demo_unsupported-candidate`: selected None of these; remained BLOCKED_EXTERNAL with external follow-up.
+- `demo_resume-failure`: armed the simulator's accept-then-lose-response fault and used the cannot-tell action. The application refetched, reported acceptance without retrying, then reported the simulator's FAILED resumption and operator notice. Persisted history contains exactly one accepted decision.
+- Replayed `demo_grounded-input`, then clicked an old-run action. Telegram rejected it; the new run retained its OPEN review and no accepted decision. New synthetic source documents arrived with explicit simulation labels.
+- `/pause` acknowledged and persisted an empty proactive subscription list. The backlog remained selectable throughout; no automatic backlog/file flood returned. Existing buttons remain usable, and `/reviews` resumes delivery.
+
+The live loop exposed a defect missed by the prior API-result tests: spreading a delivery object into a binding leaked the original message ID into an outcome, making it look already sent. Bindings now explicitly copy identity fields only. A narrow migration recovers affected unsent legacy outcomes; real delivery and no-repeat-after-restart assertions cover the fix. The recovery emitted one current outcome per previously affected review, including two historical reviews for the sequential case. The dashboard's demo wording also now accurately identifies shared Telegram reset scope.
+
+Final checks: `npm run check` passed **60 tests**, TypeScript and production build. The affected F2 browser regression passed **1/1** (real simulator API with labelled transport double), in addition to the live browser journeys above. A read-only assertion script validated all **23 persisted live cases**, exact override value/channel, immutable machine outcomes, single acceptance after response loss, stale-run isolation, and paused subscriptions. Dashboard console warning/error collection was empty. Dashboard screenshot inspected. Build reports third-party Zod PURE-comment warnings; no app runtime errors were suppressed. Hermes logs' unclean-exit warning is expected from the deliberate restart test; missing Nous auxiliary credentials do not affect this deterministic, non-LLM flow.
 
 ## Live backlog finding and correction
 
-The first authorized live startup sent 14 case notices and 21 source documents from the seeded backlog. Delivery was deduplicated but still far too noisy. The notifier was stopped; application routing and backend decisions were preserved. Large backlogs now stay in a selectable digest until a human chooses a case. `/pause` durably disables proactive delivery; `/reviews` explicitly reopens the queue. Tests verify no automatic review/file flood after a minute or restart, selected document retry, stale digest buttons, operator-only failure visibility, and pause persistence. The service is resumed paused; the corrected live interaction still needs user exercise. The original rate-only behavior is superseded by this correction.
+The first authorized live startup sent 14 case notices and 21 source documents from the seeded backlog. Delivery was deduplicated but still far too noisy. The notifier was stopped; application routing and backend decisions were preserved. Large backlogs now stay in a selectable digest until a human chooses a case. `/pause` durably disables proactive delivery; `/reviews` explicitly reopens the queue. Tests verify no automatic review/file flood after a minute or restart, selected document retry, stale digest buttons, operator-only failure visibility, and pause persistence. The corrected live interaction was subsequently exercised as recorded above; proactive notifications are now paused. The original rate-only behavior is superseded by this correction.
 
 ## Architecture and changes
 
@@ -50,11 +66,11 @@ The test actor/chat `101/101` are invented transport identities, not an authoriz
 
 ## Limits
 
-- Pinned Hermes cold-start polling passes `drop_pending_updates=True`; offline Telegram updates may be discarded **before plugin receipt**. The plugin cannot persist updates it never sees. Already received updates and application mappings are restart-tested. This upstream transport gap and actual gateway network reconnect remain live reliability checks, not a claim of exactly-once transport.
+- Pinned Hermes cold-start polling passes `drop_pending_updates=True`; offline Telegram updates may be discarded **before plugin receipt**. The plugin cannot persist updates it never sees. Already received updates and application mappings are restart-tested. This upstream transport gap remains unresolved. A deliberate gateway restart/reconnect with an existing pending confirmation passed; updates sent during an offline window were not tested and are not guaranteed.
 - Notifications can duplicate after a crash between external send and local mapping persistence. Decisions cannot be reapplied because current-run backend acceptance remains first-writer-wins. A crash before an inbound action finishes routing may require a fresh explicit human action; it never transfers a proposal to another review.
 - Individual delivery/marker attempts stop after five failures, source documents after three, with bounded backoff and a dashboard fallback. No production multi-process database or power-loss durability guarantee is claimed. Application JSON and simulator JSON are single-process atomic-replace files; plugin inbound storage uses SQLite WAL.
 - The restricted profile intentionally intercepts generic commands; `/reset` does not run Hermes's general agent or erase application records. Natural-language interpretation/model submissions are absent, as required for F2.
-- Local setup/configure has a hidden prompt and explicit recipient selection. Actual BotFather credentials, full gateway startup/provider prerequisites, chat delivery, phone usability and live restart must be checked once the user finishes setup. Pinning and native-handler tests do not prove those live capabilities.
+- Local setup/configure has a hidden prompt and explicit recipient selection. Actual gateway startup, authorized chat delivery and live restart are now verified above. Phone usability and messages sent before gateway receipt during an outage remain unverified.
 - The real-backend adapter must be exercised with its trusted actor assertion/authentication mechanism. No participant extraction, dataset evaluation, real shipping documents or private answer keys are involved.
 
 ## Reproduce

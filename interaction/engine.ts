@@ -73,6 +73,14 @@ type State = {
 };
 const token = () => randomBytes(16).toString("hex");
 const recipientKey = (r: Recipient) => `${r.actor}/${r.chat}`;
+// Structural typing does not strip delivery metadata from a Binding at runtime.
+const cleanBinding = (b: Binding): Binding => ({
+  actor: b.actor,
+  chat: b.chat,
+  caseId: b.caseId,
+  review: b.review,
+  run: b.run,
+});
 const initial = (): State => ({
   version: 1,
   mappings: {},
@@ -102,6 +110,17 @@ export class ReviewEngine {
       : initial();
     if (this.state.version !== 1)
       throw new Error("Unsupported interaction state");
+    // Recover outcomes poisoned by a review's message ID in older state files.
+    for (const p of Object.values(this.state.proposals)) {
+      const legacy = p as Proposal & { message?: string };
+      if (!legacy.message) continue;
+      const key = `${p.run}/outcome/${p.review}/${recipientKey(p)}`;
+      const d = this.state.deliveries[key];
+      if (d?.message === legacy.message && d.attempts === 0) {
+        delete d.message;
+        delete d.held;
+      }
+    }
   }
   save() {
     mkdirSync(dirname(this.file), { recursive: true });
@@ -123,7 +142,8 @@ export class ReviewEngine {
   }
   binding(c: Case, r: Recipient): Binding {
     return {
-      ...r,
+      actor: r.actor,
+      chat: r.chat,
       caseId: c.case_id,
       run: c.run.run_id,
       review: c.review?.review_id ?? "",
@@ -147,7 +167,12 @@ export class ReviewEngine {
     option?: string,
   ): Button {
     const id = token();
-    this.state.buttons[id] = { binding: b, action, proposal, option };
+    this.state.buttons[id] = {
+      binding: cleanBinding(b),
+      action,
+      proposal,
+      option,
+    };
     return { text, callback_data: "ship:" + id };
   }
   async sendButtons(b: Binding, text: string, buttons: Button[][]) {
@@ -179,7 +204,7 @@ export class ReviewEngine {
     this.invalidate(b);
     const id = token();
     this.state.proposals[id] = {
-      ...b,
+      ...cleanBinding(b),
       decision: d,
       phase,
       updated: this.now(),
@@ -396,7 +421,7 @@ export class ReviewEngine {
           this.invalidate(b);
           const id = token();
           const p: Proposal = {
-            ...b,
+            ...cleanBinding(b),
             decision: d,
             phase: "preview",
             updated: this.now(),
@@ -450,7 +475,7 @@ export class ReviewEngine {
   async deliver(d: Delivery, c: Case) {
     const api = this.apiFor(d.actor);
     if (!d.message) {
-      const b = d,
+      const b = cleanBinding(d),
         r = c.review;
       let text = "",
         buttons: Button[][] = [];
@@ -589,7 +614,7 @@ export class ReviewEngine {
               continue;
             const key = `${p.run}/outcome/${p.review}/${recipientKey(p)}`;
             this.state.deliveries[key] ??= {
-              ...p,
+              ...cleanBinding(p),
               key,
               type: "outcome",
               attempts: 0,
