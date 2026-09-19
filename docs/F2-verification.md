@@ -9,11 +9,15 @@ Date: 19 September 2026. Branch: `feat/prd-2-interaction-frontend`. F1 checkpoin
 | Application logic + real simulator HTTP API | Verified by automated tests; Telegram transport double explicitly used |
 | Hermes native plugin registration + Telegram SDK | Verified against installed commit `44945d224c2ccd6e0a55f16223c7ab0dd39331bf`, package version 0.21.3; Telegram network mocked |
 | Restart and recovery | Application state reopened; native PTB gateway application recreated; queued update replay and duplicate suppression verified; simulator restart covered by retained F1 tests |
-| Live Hermes gateway + Telegram chat | **Outstanding**: bot token and explicit test-chat authorization not yet configured; no messages sent to a real chat |
+| Live Hermes gateway + Telegram chat | **Partial**: gateway connected and initial outbound notices/documents reached the authorized chat. Full confirmed-decision handshake and live restart remain outstanding. See live finding below. |
 | Real backend | **Outstanding**: no backend URL/scoped credentials supplied; extraction/grounding accuracy not evaluated |
 | Hosted deployment / container execution | Prior external gates remain outstanding |
 
 Do not describe this as live F2 completion. The user is new to Telegram bots; [setup guide](F2-setup.md) supplies hidden-token setup and local ID approval without asking for secrets in chat.
+
+## Live backlog finding and correction
+
+The first authorized live startup sent 14 case notices and 21 source documents from the seeded backlog. Delivery was deduplicated but still far too noisy. The notifier was stopped; application routing and backend decisions were preserved. Large backlogs now stay in a selectable digest until a human chooses a case. `/pause` durably disables proactive delivery; `/reviews` explicitly reopens the queue. Tests verify no automatic review/file flood after a minute or restart, selected document retry, stale digest buttons, operator-only failure visibility, and pause persistence. The service is resumed paused; the corrected live interaction still needs user exercise. The original rate-only behavior is superseded by this correction.
 
 ## Architecture and changes
 

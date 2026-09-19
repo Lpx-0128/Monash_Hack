@@ -39,6 +39,7 @@ type Proposal = Binding & {
   updated: number;
 };
 type Delivery = Binding & {
+  held?: boolean;
   key: string;
   type: "review" | "mismatch" | "failure" | "outcome";
   message?: string;
@@ -50,6 +51,7 @@ type Delivery = Binding & {
   documentDue: number;
 };
 type State = {
+  digestRequested?: string[];
   version: 1;
   mappings: Record<string, Binding>;
   buttons: Record<
@@ -306,13 +308,27 @@ export class ReviewEngine {
       this.state.processed[u.id] = true;
       this.save();
       try {
-        if (u.text === "/start" || u.text === "/reviews") {
-          if (!this.state.recipients.includes(recipientKey(recipient)))
-            this.state.recipients.push(recipientKey(recipient));
+        if (u.text === "/pause") {
+          this.state.recipients = this.state.recipients.filter(
+            (k) => k !== recipientKey(recipient),
+          );
           this.save();
           await this.tell(
             recipient,
-            "Synthetic shipping review enabled. Reply to a review message to enter a value. Bare values are never assigned. /reviews shows your queue; /reset resets Hermes conversation only, not shipping decisions.",
+            "Proactive notifications paused. Existing review buttons still work. Use /reviews to resume with a selectable digest.",
+          );
+          return;
+        }
+        if (u.text === "/start" || u.text === "/reviews") {
+          if (!this.state.recipients.includes(recipientKey(recipient)))
+            this.state.recipients.push(recipientKey(recipient));
+          this.state.digestRequested ??= [];
+          if (!this.state.digestRequested.includes(recipientKey(recipient)))
+            this.state.digestRequested.push(recipientKey(recipient));
+          this.save();
+          await this.tell(
+            recipient,
+            "Synthetic shipping review enabled. A selectable digest will follow. Choose one case to open its review and documents. Reply to that review for value input. /pause stops proactive notifications; /reviews opens the queue. Bare values never choose a review.",
           );
           return;
         }
@@ -326,6 +342,23 @@ export class ReviewEngine {
           )
             throw new RemoteError(403, "FORBIDDEN");
           const b = btn.binding;
+          if (btn.action === "show") {
+            const d = this.state.deliveries[btn.option!];
+            if (!d) throw new RemoteError(404, "NOT_FOUND");
+            const c = await this.apiFor(b.actor).get(b.caseId);
+            if (
+              c.run.run_id !== b.run ||
+              (d.type === "review" &&
+                (c.review?.review_id !== b.review ||
+                  c.review.status !== "OPEN"))
+            )
+              throw new RemoteError(409, "STALE_RUN");
+            d.held = false;
+            d.message = undefined; // Explicit user request may reopen an already delivered review.
+            this.save();
+            await this.deliver(d, c);
+            return;
+          }
           await this.current(b);
           if (btn.proposal) {
             const p = this.state.proposals[btn.proposal];
@@ -567,10 +600,77 @@ export class ReviewEngine {
             };
           }
         this.save();
+        const active = Object.values(this.state.deliveries).filter(
+          (d) =>
+            d.actor === recipient.actor &&
+            d.chat === recipient.chat &&
+            d.type !== "outcome" &&
+            summaries.some(
+              (s) =>
+                s.case_id === d.caseId &&
+                s.run_id === d.run &&
+                (d.type !== "review" || s.has_open_review),
+            ),
+        );
+        const backlog = active.filter(
+          (d) =>
+            !d.message &&
+            !Object.values(this.state.proposals).some(
+              (p) =>
+                p.phase === "done" && p.caseId === d.caseId && p.run === d.run,
+            ),
+        );
+        const requested = this.state.digestRequested?.includes(
+          recipientKey(recipient),
+        );
+        if (backlog.length > 3 || requested) {
+          for (const d of backlog) d.held = true;
+          const signature = backlog
+            .map((d) => d.key)
+            .sort()
+            .join("|");
+          const prior = this.state.digests[recipientKey(recipient)];
+          if (
+            requested ||
+            !prior ||
+            (prior.signature !== signature && this.now() - prior.at >= 60000)
+          ) {
+            const choices = requested ? active : backlog;
+            this.state.digests[recipientKey(recipient)] = {
+              at: this.now(),
+              signature,
+            };
+            this.state.digestRequested = this.state.digestRequested?.filter(
+              (k) => k !== recipientKey(recipient),
+            );
+            this.save();
+            if (choices.length)
+              await this.sendButtons(
+                choices[0],
+                `${choices.length} synthetic cases queued. Choose ONE case below to open its notice and source documents. The backlog will not be sent automatically. /pause stops proactive notifications.\n${this.dashboard}/cases`,
+                choices.map((d) => [
+                  this.button(
+                    d,
+                    `${d.type}: ${d.caseId}`.slice(0, 80),
+                    "show",
+                    undefined,
+                    d.key,
+                  ),
+                ]),
+              );
+            else
+              await this.tell(
+                recipient,
+                "No current case notices.\n" + this.dashboard + "/cases",
+              );
+          }
+          this.save();
+        }
         const pending = Object.values(this.state.deliveries).filter(
           (d) =>
             d.actor === recipient.actor &&
             d.chat === recipient.chat &&
+            !d.held &&
             d.attempts < 5 &&
             d.due <= this.now() &&
             (!d.message || d.type === "review"),
@@ -604,27 +704,6 @@ export class ReviewEngine {
             d.due = this.now() + Math.min(60000, 3000 * 2 ** d.attempts);
             this.save();
           }
-        }
-        const queued = pending.filter((d) => !d.message && d.attempts < 5),
-          signature = queued
-            .map((d) => d.key)
-            .sort()
-            .join("|"),
-          prior = this.state.digests[recipientKey(recipient)];
-        if (
-          queued.length > 3 &&
-          (!prior ||
-            (prior.signature !== signature && this.now() - prior.at >= 60000))
-        ) {
-          this.state.digests[recipientKey(recipient)] = {
-            at: this.now(),
-            signature,
-          };
-          this.save();
-          await this.tell(
-            recipient,
-            `${queued.length} synthetic case notices queued. Individual reviews will follow at a controlled rate. Select a case in the dashboard: ${this.dashboard}/cases`,
-          );
         }
       }
     });

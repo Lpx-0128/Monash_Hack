@@ -59,7 +59,7 @@ npm run start:f2
 python scripts/f2_setup.py gateway
 ```
 
-After all three start, send `/start` again. Open **http://localhost:5176/cases**. Reviews arrive gradually, at most one individual case notice per recipient every three seconds. A digest describes remaining queued work. It does not mark individual reviews delivered.
+After all three start, send `/start` again. Open **http://localhost:5176/cases**. A selectable digest lists the backlog; choose one case to open its review and source documents. Large backlogs do not automatically drain into chat. Subsequent reviews/results and small newly arriving batches remain proactive, with bounded spacing. A digest does not mark individual reviews delivered. `/pause` stops proactive notifications across restarts; `/reviews` resumes with a selectable queue.
 
 F2 exposes no model tools and does not invoke an LLM for shipping actions. No model key was needed by the native-plugin tests. Full live gateway startup still needs verification; if the installed gateway requires provider setup independently, configure it through Hermes's local credential UI, never by pasting a key into this repository or conversation.
 

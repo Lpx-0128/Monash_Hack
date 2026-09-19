@@ -169,8 +169,9 @@ test("F2 notification sends stop after bounded failures instead of flooding inde
   const h = await setup(t),
     api = new ReviewApi(h.base, secret, "101");
   const listed = await api.list();
+  let arrived = false;
   api.list = async () =>
-    listed.filter((c) => c.case_id === "demo_grounded-input");
+    arrived ? listed.filter((c) => c.case_id === "demo_grounded-input") : [];
   let now = 100000;
   const engine = new ReviewEngine(
     join(h.dir, "bounded.json"),
@@ -187,6 +188,8 @@ test("F2 notification sends stop after bounded failures instead of flooding inde
     message: "1",
     text: "/start",
   });
+  await engine.tick();
+  arrived = true;
   const before = h.transport.sendAttempts;
   h.transport.failSend = true;
   for (let i = 0; i < 8; i++) {
@@ -385,10 +388,40 @@ test("F2 send-marker recovery, document failure, persisted dedup, flood and dige
     before,
     "restart does not resend review or unchanged digest",
   );
+  for (let i = 0; i < 20; i++) await h.tick();
+  assert.equal(
+    h.transport.messages.length,
+    before,
+    "A static backlog must not drain into chat, even after a minute",
+  );
+  assert.equal(
+    h.transport.files.length,
+    0,
+    "Digest cannot send source documents",
+  );
+  assert.equal(
+    (await h.api.get("demo_grounded-input")).review?.notified_at,
+    null,
+  );
+  await h.click("review: demo_grounded-input");
+  assert.ok(
+    h.transport.messages.some((m) =>
+      m.text.includes("Source document delivery failed"),
+    ),
+  );
   h.transport.failDocuments = false;
   await h.tick();
   await h.tick();
   assert.ok(h.transport.files.length > 0);
+  await h.input({ text: "/pause" });
+  const pausedCount = h.transport.messages.length;
+  h.restart();
+  await h.tick();
+  assert.equal(
+    h.transport.messages.length,
+    pausedCount,
+    "Pause survives restart and stops proactive delivery",
+  );
 });
 test("F2 unauthorized sender/chat, service spoof, EVAL and cross-scope documents denied", async (t) => {
   const h = await setup(t),
@@ -512,7 +545,29 @@ test("F2 notifier correction and operator-only failure, active-run queued rechec
   const h = await setup(t);
   await h.input({ text: "/start" });
   await h.input({ actor: "202", chat: "202", text: "/start" });
-  for (let i = 0; i < 28; i++) await h.tick();
+  await h.tick();
+  const business = h.transport.messages.find(
+    (m) => m.chat === "101" && m.buttons.length,
+  )!;
+  assert.ok(
+    business.buttons.flat().every((b) => !b.text.startsWith("failure:")),
+  );
+  const mismatch = business.buttons
+    .flat()
+    .find((b) => b.text === "mismatch: demo_mismatch")!;
+  await h.input({ message: business.id, callback: mismatch.callback_data });
+  const operator = h.transport.messages.find(
+    (m) => m.chat === "202" && m.buttons.length,
+  )!;
+  const failure = operator.buttons
+    .flat()
+    .find((b) => b.text.startsWith("failure:"))!;
+  await h.input({
+    actor: "202",
+    chat: "202",
+    message: operator.id,
+    callback: failure.callback_data,
+  });
   assert.ok(
     h.transport.messages.some(
       (m) => m.text.includes("correction required") && m.buttons.length === 0,
@@ -524,8 +579,13 @@ test("F2 notifier correction and operator-only failure, active-run queued rechec
   assert.ok(failures.length);
   assert.ok(failures.every((m) => m.chat === "202"));
   const old = await h.api.get("demo_grounded-input");
+  const oldButton = business.buttons
+    .flat()
+    .find((b) => b.text === "review: demo_grounded-input")!;
   await h.api.request("/cases/" + old.case_id + "/reprocess", {});
   const n = h.transport.messages.length;
+  await h.input({ message: business.id, callback: oldButton.callback_data });
+  assert.match(h.transport.messages.at(-1)!.text, /STALE_RUN/);
   await h.tick();
   assert.ok(
     h.transport.messages
