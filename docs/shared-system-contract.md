@@ -1,7 +1,9 @@
 # Shared System Contract — v2.1.1
 
-**Date:** 19 September 2026  
-**Authority:** This document governs [PRD 1 — Backend Automation & Intelligence Layer](./prd-1-backend-automation-intelligence.md) and [PRD 2 — Interaction / Frontend Layer](./prd-2-interaction-frontend.md). Neither PRD may redefine its types, semantics, invariants, or API behavior.  
+**Date:** 19 September 2026
+
+**Authority:** This document governs [PRD 1 — Backend Automation & Intelligence Layer](./prd-1-backend.md) and [PRD 2 — Interaction / Frontend Layer](./prd-2-interaction.md). Neither PRD may redefine its types, semantics, invariants, or API behavior.
+
 **Status:** Consolidated implementation baseline. Team sign-off and the explicitly listed organizer verification items remain release gates; this document does not claim they have already happened.
 
 ## 1. Purpose, precedence, and source basis
@@ -705,4 +707,3 @@ This request is valid only for the corresponding active OPEN FIELD/VALUE_INPUT r
 ~~~
 
 The endpoint returns 202 with the complete Case in PROCESSING, the review CLOSED, and durable pending work. After application, the working value has resolved_by=HUMAN, value_origin=MANUAL_OVERRIDE, grounded=false, and the confirmation in override_confirmations. If every other field matches, the operational resolution is OK and workflow COMPLETED; if container_count differs, resolution is MISMATCH with that defect. The original NEEDS_REVIEW machine assessment and its exported empty defect list remain unchanged.
-

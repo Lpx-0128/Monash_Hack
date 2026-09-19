@@ -1,8 +1,11 @@
 # PRD 2 — Interaction / Frontend Layer
 
-**Version:** 2.1.1-aligned · 19 September 2026  
-**Authority:** [Shared System Contract v2.1.1](./shared-system-contract-v2.1.1.md) defines all data, review, decision, state, API, and access semantics.  
-**Companion:** [PRD 1 — Backend Automation & Intelligence Layer](./prd-1-backend-automation-intelligence.md)  
+**Version:** 2.1.1-aligned · 19 September 2026
+
+**Authority:** [Shared System Contract v2.1.1](./shared-system-contract.md) defines all data, review, decision, state, API, and access semantics.
+
+**Companion:** [PRD 1 — Backend Automation & Intelligence Layer](./prd-1-backend.md)
+
 **Owner:** C — Interaction + Submission; B supports APIs/access; A supports evidence.
 
 **Selected Telegram framework:** Nous Research Hermes Agent. This is an interaction-layer implementation choice under Shared Contract v2.1.1; it does not change the shared API or backend ownership. Pin the tested Hermes release/commit during F2 setup.
@@ -421,4 +424,3 @@ Official documentation consulted for this selection:
 - [Toolsets reference](https://hermes-agent.nousresearch.com/docs/reference/toolsets-reference): configurable tool availability; restrict the application profile to its intended workflow.
 
 The architecture and additional checks above are project requirements inferred from Shared Contract v2.1.1, not claims of out-of-the-box Hermes guarantees. No Hermes installation or integration test has been performed as part of this PRD update.
-

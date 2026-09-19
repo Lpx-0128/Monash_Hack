@@ -1,8 +1,11 @@
 # PRD 1 — Backend Automation & Intelligence Layer
 
-**Version:** 2.1.1-aligned · 19 September 2026  
-**Authority:** [Shared System Contract v2.1.1](./shared-system-contract-v2.1.1.md) governs every interface and shared semantic rule.  
-**Companion:** [PRD 2 — Interaction / Frontend Layer](./prd-2-interaction-frontend.md)  
+**Version:** 2.1.1-aligned · 19 September 2026
+
+**Authority:** [Shared System Contract v2.1.1](./shared-system-contract.md) governs every interface and shared semantic rule.
+
+**Companion:** [PRD 2 — Interaction / Frontend Layer](./prd-2-interaction.md)
+
 **Owners:** A — Document Intelligence; B — Platform + Validation.
 
 ## 1. Objective and user context
@@ -309,5 +312,3 @@ A/B give C complete validated fixtures, scoped API credentials, endpoint behavio
 This revision removes actionability-based scored skipping, completed-workflow-only export, fake technical-failure output, weak human grounding, and “rerun only one step” language. It moves grounding and meaningful AI into B1, brings review integration forward, defines field policies, and makes override/retry/reprocess behavior implementable. The implementation remains small: REST, polling, transactional state, and one durable worker.
 
 The v2.1.1 refinement incorporates the inspected participant input shape, nullable receipt-time mapping, system timestamp semantics, and related validation. It supersedes the temporary recommendation to block participant conversion on missing received_at. Other unresolved organizer interpretations remain open; this amendment does not settle no-attachment intent or numeric/text comparison policy through assumption.
-
-
