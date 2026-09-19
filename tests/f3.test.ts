@@ -164,7 +164,7 @@ test("F3 real API requires exact confirmation after interpretation and retains g
   assert.equal((await h.api.get("demo_grounded-input")).review?.status, "OPEN");
   assert.match(
     h.messages.at(-1)!.text,
-    /Copilot interpretation.*Proposal only/,
+    /Copilot interpreted[\s\S]*No decision submitted/,
   );
   await h.click("Confirm value");
   assert.equal(
@@ -222,7 +222,7 @@ test("F3 delayed model output cannot target a reprocessed run", async (t) => {
   assert.equal(response.status, 202);
   release(proposal);
   await pending;
-  assert.ok(!h.messages.some((m) => /Confirm canonical value/.test(m.text)));
+  assert.ok(!h.messages.some((m) => /Does this look right/.test(m.text)));
   assert.equal(Object.keys(h.engine.state.proposals).length, 0);
 });
 test("F3 interpreted choice is a preview, not an immediate action", async (t) => {
@@ -238,7 +238,7 @@ test("F3 interpreted choice is a preview, not an immediate action", async (t) =>
   };
   await h.input({ reply: m.id, text: "Use the second one" });
   assert.equal((await h.api.get(c.case_id)).review?.status, "OPEN");
-  assert.match(h.messages.at(-1)!.text, /BL gross_weight_kg: 22000 kg/);
+  assert.match(h.messages.at(-1)!.text, /BL gross weight: 22000 kg/);
   await h.click("Confirm value");
   assert.equal((await h.api.get(c.case_id)).workflow_status, "PROCESSING");
 });

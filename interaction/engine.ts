@@ -8,7 +8,14 @@ import {
 } from "node:fs";
 import { dirname } from "node:path";
 import type { Case, DecisionRequest } from "../shared/types";
-import { effectiveStatus } from "../shared/validation";
+import {
+  detailCopy,
+  errorCopy,
+  fieldName,
+  mismatchSummary,
+  outcomeCopy,
+  reviewCopy,
+} from "./copy";
 import { ReviewApi, RemoteError } from "./api";
 import {
   interpretationInput,
@@ -237,11 +244,11 @@ export class ReviewEngine {
       d.action === "ACKNOWLEDGE"
         ? "Acknowledge external action; this does not complete verification."
         : d.action === "SELECT_OPTION"
-          ? `${r.target_role ? `Assign ${r.target_role} document` : `${r.side} ${r.field}`}: ${String(proposed)}${r.field === "gross_weight_kg" ? " kg" : ""}`
-          : `${r.side} ${r.field}: ${String(proposed)}${r.field === "gross_weight_kg" ? " kg" : ""}`;
+          ? `${r.target_role ? `Assign ${r.target_role} document` : `${r.side} ${fieldName(r.field)}`}: ${String(proposed)}${r.field === "gross_weight_kg" ? " kg" : ""}`
+          : `${r.side} ${fieldName(r.field)}: ${String(proposed)}${r.field === "gross_weight_kg" ? " kg" : ""}`;
     await this.sendButtons(
       b,
-      `${phase === "override" ? "This value cannot be verified from the source. Confirm an ungrounded manual override?" : "Confirm canonical value"}\n${description}\nInterpretation: ${source}. Proposal only; no decision submitted.\nCase ${b.caseId}\nReview ${b.review}\nRun ${b.run}\n${this.link(b)}`,
+      `${phase === "override" ? "I couldn’t verify this value in the source.\nUse it anyway as your own unverified value?" : "Does this look right?"}\n${description}\n\n${c.email.subject}\n${source === "deterministic" ? "I read your value using the input rules." : "Copilot interpreted your reply—please check it carefully."}\nNo decision submitted. Confirm below, or Cancel and reply to the original review with a different answer.\n\nSynthetic practice case`,
       [
         [
           this.button(
@@ -251,6 +258,10 @@ export class ReviewEngine {
             id,
           ),
           this.button(b, "Cancel", "cancel", id),
+        ],
+        [
+          this.button(b, "View details", "details"),
+          this.button(b, "Open dashboard", "dashboard"),
         ],
       ],
     );
@@ -295,7 +306,7 @@ export class ReviewEngine {
       this.save();
       await this.tell(
         p,
-        "Decision accepted (202); processing continues. This is not completion.\n" +
+        "Thanks—your response was accepted (202).\nProcessing continues; this is not completion yet. I’ll send the result when it’s ready.\n" +
           this.link(p),
       );
     } catch (e) {
@@ -320,7 +331,7 @@ export class ReviewEngine {
       }
       await this.tell(
         p,
-        `${e instanceof RemoteError ? e.code : "Request unavailable"}. Review was not resubmitted.\n${this.link(p)}`,
+        errorCopy(e instanceof RemoteError ? e.code : "UNAVAILABLE"),
       );
     }
   }
@@ -337,8 +348,8 @@ export class ReviewEngine {
     await this.tell(
       p,
       accepted
-        ? "Backend records a decision for this review. Processing/result will be reported; do not re-enter it."
-        : `Response uncertain. Current state: ${c.workflow_status}. No automatic retry. Reply to an active review to create a new proposal.\n${this.link(p)}`,
+        ? "I checked: a decision is already saved for this review. Please don’t enter it again; I’ll report the processing result."
+        : "The connection dropped, and I couldn’t confirm an accepted decision. I haven’t retried it. Send /reviews to check the latest state before answering again.",
     );
   }
   inbound(u: Incoming) {
@@ -358,7 +369,7 @@ export class ReviewEngine {
           this.save();
           await this.tell(
             recipient,
-            "Proactive notifications paused. Existing review buttons still work. Use /reviews to resume with a selectable digest.",
+            "You’re on pause—no new proactive notifications. Existing review buttons still work. Send /reviews when you’re ready to continue.",
           );
           return;
         }
@@ -371,7 +382,7 @@ export class ReviewEngine {
           this.save();
           await this.tell(
             recipient,
-            "Synthetic shipping review enabled. A selectable digest will follow. Choose one case to open its review and documents. Reply to that review for value input. /pause stops proactive notifications; /reviews opens the queue. Bare values never choose a review.",
+            "Let’s review your practice cases. I’ll show a queue—pick one to see what needs your attention.\n\nNew notifications are on. Send /pause any time to quiet them.",
           );
           return;
         }
@@ -385,6 +396,34 @@ export class ReviewEngine {
           )
             throw new RemoteError(403, "FORBIDDEN");
           const b = btn.binding;
+          if (btn.action === "details" || btn.action === "dashboard") {
+            const c = await this.apiFor(b.actor).get(b.caseId);
+            if (
+              c.run.run_id !== b.run ||
+              (btn.action === "details" &&
+                b.review &&
+                c.review?.review_id !== b.review)
+            )
+              throw new RemoteError(409, "STALE_RUN");
+            if (btn.action === "dashboard") {
+              const url = new URL(this.link(b));
+              const local = ["localhost", "127.0.0.1", "[::1]"].includes(
+                url.hostname,
+              );
+              await this.tell(
+                b,
+                local
+                  ? `Open this on the laptop running the demo:\n${url}\n\nIf Telegram doesn’t make it clickable, copy it into the browser’s address bar. Keep the demo running. This local address won’t open the laptop’s dashboard on your phone.`
+                  : `Open your case in the dashboard:\n${url}`,
+              );
+            } else {
+              // Split long evidence without discarding a field or safety context.
+              const text = detailCopy(c);
+              for (let offset = 0; offset < text.length; offset += 3500)
+                await this.tell(b, text.slice(offset, offset + 3500));
+            }
+            return;
+          }
           if (btn.action === "show") {
             const d = this.state.deliveries[btn.option!];
             if (!d) throw new RemoteError(404, "NOT_FOUND");
@@ -412,7 +451,7 @@ export class ReviewEngine {
               this.save();
               await this.tell(
                 b,
-                "Proposal cancelled. Reply with a new value when ready.",
+                "Cancelled—nothing submitted. Reply to the original review with a new answer when you’re ready.",
               );
               return;
             }
@@ -455,7 +494,7 @@ export class ReviewEngine {
         if (!b || b.actor !== u.actor) {
           await this.tell(
             recipient,
-            "Reply to the specific review message. A bare value or generic yes cannot choose a review.",
+            "Which case is this for? Use Telegram’s Reply on the review you want to answer. Send /reviews if you need to find it. Nothing submitted.",
           );
           return;
         }
@@ -480,13 +519,13 @@ export class ReviewEngine {
           if (!this.interpret) {
             await this.tell(
               b,
-              "Use a canonical value or the review buttons. Natural-language interpretation is unavailable.",
+              "I can’t interpret a sentence right now. Reply with just the value in the requested format, or use the review’s buttons.",
             );
             return;
           }
           await this.tell(
             b,
-            "Interpreting this reply with Copilot. Nothing will be submitted without your confirmation.",
+            "Let me check what you mean with Copilot. I’ll show a preview for you to confirm before submitting anything.",
           );
           try {
             const raw = await this.interpret(interpretationInput(c, text));
@@ -495,7 +534,7 @@ export class ReviewEngine {
             if (!decision) {
               await this.tell(
                 b,
-                "Please clarify one value or option for this review, or use its buttons. No decision submitted.",
+                "I’m not sure which answer you mean. Could you reply with one exact value or choose an option? No decision submitted.",
               );
               return;
             }
@@ -509,7 +548,7 @@ export class ReviewEngine {
             if (e instanceof RemoteError) throw e;
             await this.tell(
               b,
-              "Copilot could not produce a valid proposal. No decision submitted. Use a canonical value or the review buttons.",
+              "I couldn’t reliably interpret that reply. No decision submitted. Try just the value in the requested format, or use the review’s buttons.",
             );
           }
           return;
@@ -529,10 +568,8 @@ export class ReviewEngine {
         await this.tell(
           recipient,
           e instanceof RemoteError
-            ? `${e.code}: review handled, replaced, or unavailable. Use the dashboard/current review.`
-            : e instanceof Error && !(e instanceof TypeError)
-              ? e.message
-              : "Connection unavailable. No automatic decision retry.",
+            ? errorCopy(e.code)
+            : "Something interrupted this request. I haven’t automatically retried your decision. Check the current case through /reviews before trying again; if this continues, ask the operator to check the service.",
         );
       }
     });
@@ -545,12 +582,7 @@ export class ReviewEngine {
       let text = "",
         buttons: Button[][] = [];
       if (d.type === "review" && r) {
-        text = `SYNTHETIC — simulated grounding\n${c.email.subject}\n${r.question}\n${r.context_summary}\nTarget: ${r.scope === "FIELD" ? `${r.side} ${r.field}${r.field === "gross_weight_kg" ? " (kg; dot decimal, no grouping)" : ""}` : `document role ${r.target_role ?? "external action"}`}\nKnown mismatches: ${
-          c.fields
-            .filter((f) => f.result === "MISMATCH")
-            .map((f) => f.field)
-            .join(", ") || "none"
-        }\nReply to THIS message for value input.\n${this.link(b)}`;
+        text = reviewCopy(c);
         if (r.ui_mode === "CHOICE")
           buttons = (r.options ?? []).map((o) => [
             this.button(
@@ -573,29 +605,15 @@ export class ReviewEngine {
               ),
             ],
           ];
-        for (const o of r.options ?? [])
-          if (o.kind === "VALUE")
-            text += `\n${o.label}: ${o.value.evidence.map((e) => e.source_text).join("; ") || "No grounding evidence; override confirmation may be required."}`;
-        if (r.field) {
-          const f = c.fields.find((f) => f.field === r.field);
-          for (const side of ["si", "bl"] as const) {
-            const v = f?.[side];
-            text += `\n${side.toUpperCase()}: raw ${v?.raw ?? "unknown"}; canonical ${v?.normalized ?? "unknown"}; ${v?.value_origin ?? "unknown"}; ${v?.grounded ? "grounded" : "unverified"}. Evidence: ${v?.evidence.map((e) => e.source_text).join("; ") || "none"}`;
-          }
-        }
       } else if (d.type === "mismatch")
-        text = `SYNTHETIC — correction required. Verification completed with mismatch: ${c.fields
-          .filter((f) => f.result === "MISMATCH")
-          .map(
-            (f) => `${f.field}: SI ${f.si?.normalized}, BL ${f.bl?.normalized}`,
-          )
-          .join("; ")}\n${this.link(b)}`;
+        text = `The check is finished, but corrections are still needed.\n${c.email.subject}\n\n${mismatchSummary(c)}\nPlease arrange a corrected document.\n\nSynthetic practice case · checks are simulated`;
       else if (d.type === "failure")
-        text = `SYNTHETIC — operator notice: ${c.failure?.step}, attempts ${c.failure?.attempts}. Accepted input, if any, is retained.\n${this.link(b)}`;
-      else
-        text = `SYNTHETIC — current workflow ${c.workflow_status}; operational ${effectiveStatus(c)}; frozen machine ${c.machine_assessment?.status ?? "unavailable"}; follow-up ${c.follow_up}. ${c.workflow_status === "BLOCKED_EXTERNAL" ? "External action still required." : ""}\n${this.link(b)}`;
-      if (d.type === "outcome" && c.resolution)
-        text += `\nHuman action: ${c.resolution.value_source ?? c.resolution.action}${c.resolution.value_source === "MANUAL_OVERRIDE" ? " — human-provided and ungrounded" : ""}.`;
+        text = `Processing stopped—operator help needed.\n${c.email.subject}\n\nAny accepted response is saved. Please inspect the failure in the dashboard before retrying.\n\nSynthetic practice case · checks are simulated`;
+      else text = outcomeCopy(c);
+      buttons.push([
+        this.button(b, "View details", "details"),
+        this.button(b, "Open dashboard", "dashboard"),
+      ]);
       d.message = await this.sendButtons(b, text.slice(0, 3900), buttons);
       if (d.type === "review")
         this.state.mappings[`${d.chat}/${d.message}`] = b;
@@ -626,7 +644,7 @@ export class ReviewEngine {
           if (d.documentAttempts === 1)
             await this.tell(
               d,
-              "Source document delivery failed. Review remains available in the authorized dashboard; delivery will retry.\n" +
+              "I couldn’t attach the source document. I’ll retry delivery; meanwhile you can inspect it in the dashboard. Don’t guess a value without checking the source.\n" +
                 this.link(d),
             );
         }
@@ -737,11 +755,14 @@ export class ReviewEngine {
             if (choices.length)
               await this.sendButtons(
                 choices[0],
-                `${choices.length} synthetic cases queued. Choose ONE case below to open its notice and source documents. The backlog will not be sent automatically. /pause stops proactive notifications.\n${this.dashboard}/cases`,
+                `${choices.length} practice cases are queued.\nWhich would you like to open? Pick one below; I won’t send the whole backlog.\n\nSend /pause to stop new notifications.`,
                 choices.map((d) => [
                   this.button(
                     d,
-                    `${d.type}: ${d.caseId}`.slice(0, 80),
+                    `${d.type === "review" ? "Review" : d.type === "failure" ? "Needs help" : "Needs correction"}: ${summaries.find((s) => s.case_id === d.caseId)?.subject ?? d.caseId}`.slice(
+                      0,
+                      80,
+                    ),
                     "show",
                     undefined,
                     d.key,
@@ -751,7 +772,9 @@ export class ReviewEngine {
             else
               await this.tell(
                 recipient,
-                "No current case notices.\n" + this.dashboard + "/cases",
+                "You’re all caught up—no current case notices.\n" +
+                  this.dashboard +
+                  "/cases",
               );
           }
           this.save();

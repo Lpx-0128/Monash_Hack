@@ -134,6 +134,39 @@ async function setup(t: any) {
     },
   };
 }
+test("Conversational review details are read-only, scoped and leave exact confirmation usable", async (t) => {
+  const h = await setup(t),
+    mismatch = await h.review("mismatch-review");
+  assert.match(mismatch.text, /Could you check the BL gross weight/);
+  assert.match(mismatch.text, /container count: SI 3, BL 4/);
+  const m = await h.review("grounded-input");
+  assert.ok(!m.text.includes("DOCUMENT_EXTRACTED") && !m.text.includes("Run:"));
+  await h.input({ reply: m.id, text: "21707" });
+  await h.click("View details");
+  assert.match(
+    h.transport.messages.at(-1)!.text,
+    /Frozen machine assessment: NEEDS_REVIEW/,
+  );
+  assert.match(h.transport.messages.at(-1)!.text, /DOCUMENT_EXTRACTED/);
+  await h.click("Open dashboard");
+  assert.match(h.transport.messages.at(-1)!.text, /copy it into the browser/);
+  let c = await h.api.get("demo_grounded-input");
+  assert.equal(c.review?.status, "OPEN");
+  assert.equal(
+    c.history.filter((e) => e.type === "DECISION_RECEIVED").length,
+    0,
+  );
+  await h.click("Confirm value");
+  assert.equal((await h.api.get(c.case_id)).workflow_status, "PROCESSING");
+  await h.advance();
+  await h.api.request("/cases/" + c.case_id + "/reprocess", {});
+  await h.click("View details");
+  assert.match(
+    h.transport.messages.at(-1)!.text,
+    /already been handled or replaced/,
+  );
+});
+
 test("F2 grounded explicit reply, persisted preview, authenticated callback, 202 and frozen outcome", async (t) => {
   const h = await setup(t),
     before = await h.api.get("demo_grounded-input"),
@@ -163,18 +196,16 @@ test("F2 grounded explicit reply, persisted preview, authenticated callback, 202
   const outcomes = () =>
     h.transport.messages.filter(
       (m) =>
-        m.text.includes("current workflow COMPLETED") &&
-        m.text.includes(before.case_id),
+        m.text.includes(
+          "The check is finished—the compared values now match",
+        ) && m.text.includes(before.email.subject),
     );
   assert.equal(
     outcomes().length,
     1,
     "settled outcome must actually be sent to Telegram",
   );
-  assert.match(
-    outcomes()[0].text,
-    /operational OK; frozen machine NEEDS_REVIEW/,
-  );
+  assert.match(outcomes()[0].text, /original machine assessment is unchanged/);
   h.restart();
   await h.tick();
   assert.equal(
@@ -221,8 +252,9 @@ test("F2 recovers legacy outcome message alias without repeating it after restar
   const outcomes = () =>
     h.transport.messages.filter(
       (m) =>
-        m.text.includes("current workflow COMPLETED") &&
-        m.text.includes(p.caseId),
+        m.text.includes(
+          "The check is finished—the compared values now match",
+        ) && m.text.includes("Source available"),
     );
   assert.equal(outcomes().length, 1);
   assert.notEqual(outcomes()[0].id, m.id);
@@ -342,7 +374,7 @@ test("F2 choices, document-role targeting, unsupported candidate and all escapes
 test("F2 SI before BL; old replies and reprocessed callbacks never migrate", async (t) => {
   const h = await setup(t),
     m = await h.review("both-sides");
-  assert.match(m.text, /SI gross_weight_kg/);
+  assert.match(m.text, /SI gross weight/);
   await h.input({ reply: m.id, text: "21707" });
   await h.click("Confirm value");
   await h.advance();
@@ -469,10 +501,10 @@ test("F2 send-marker recovery, document failure, persisted dedup, flood and dige
     (await h.api.get("demo_grounded-input")).review?.notified_at,
     null,
   );
-  await h.click("review: demo_grounded-input");
+  await h.click("Review: Source available · enter BL gross weight");
   assert.ok(
     h.transport.messages.some((m) =>
-      m.text.includes("Source document delivery failed"),
+      m.text.includes("couldn’t attach the source document"),
     ),
   );
   h.transport.failDocuments = false;
@@ -595,7 +627,7 @@ test("F2 two sequential reviews complete; wrong actor callback, cancellation and
   await h.click("Confirm value");
   await h.advance();
   const second = await h.review("both-sides");
-  assert.match(second.text, /BL gross_weight_kg/);
+  assert.match(second.text, /BL gross weight/);
   await h.input({ reply: second.id, text: "21707" });
   await h.click("Confirm value");
   await h.advance();
@@ -616,18 +648,18 @@ test("F2 notifier correction and operator-only failure, active-run queued rechec
     (m) => m.chat === "101" && m.buttons.length,
   )!;
   assert.ok(
-    business.buttons.flat().every((b) => !b.text.startsWith("failure:")),
+    business.buttons.flat().every((b) => !b.text.startsWith("Needs help:")),
   );
   const mismatch = business.buttons
     .flat()
-    .find((b) => b.text === "mismatch: demo_mismatch")!;
+    .find((b) => b.text === "Needs correction: Container quantity differs")!;
   await h.input({ message: business.id, callback: mismatch.callback_data });
   const operator = h.transport.messages.find(
     (m) => m.chat === "202" && m.buttons.length,
   )!;
   const failure = operator.buttons
     .flat()
-    .find((b) => b.text.startsWith("failure:"))!;
+    .find((b) => b.text.startsWith("Needs help:"))!;
   await h.input({
     actor: "202",
     chat: "202",
@@ -636,22 +668,31 @@ test("F2 notifier correction and operator-only failure, active-run queued rechec
   });
   assert.ok(
     h.transport.messages.some(
-      (m) => m.text.includes("correction required") && m.buttons.length === 0,
+      (m) =>
+        m.text.includes("corrections are still needed") &&
+        m.buttons
+          .flat()
+          .every((b) => ["View details", "Open dashboard"].includes(b.text)),
     ),
   );
   const failures = h.transport.messages.filter((m) =>
-    m.text.includes("operator notice"),
+    m.text.includes("operator help needed"),
   );
   assert.ok(failures.length);
   assert.ok(failures.every((m) => m.chat === "202"));
   const old = await h.api.get("demo_grounded-input");
   const oldButton = business.buttons
     .flat()
-    .find((b) => b.text === "review: demo_grounded-input")!;
+    .find(
+      (b) => b.text === "Review: Source available · enter BL gross weight",
+    )!;
   await h.api.request("/cases/" + old.case_id + "/reprocess", {});
   const n = h.transport.messages.length;
   await h.input({ message: business.id, callback: oldButton.callback_data });
-  assert.match(h.transport.messages.at(-1)!.text, /STALE_RUN/);
+  assert.match(
+    h.transport.messages.at(-1)!.text,
+    /already been handled or replaced/,
+  );
   await h.tick();
   assert.ok(
     h.transport.messages

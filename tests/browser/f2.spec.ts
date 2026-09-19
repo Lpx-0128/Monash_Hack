@@ -75,7 +75,7 @@ for (const interpreted of [false, true]) test(`${interpreted ? "F3 interpreted" 
     });
     const proposal = messages.at(-1)!;
     expect((await api.get(c.case_id)).review?.status).toBe('OPEN');
-    if (interpreted) expect(proposal.text).toContain('Copilot interpretation');
+    if (interpreted) expect(proposal.text).toContain('Copilot interpreted your reply');
     await engine.inbound({
       id: "2",
       actor: "101",
