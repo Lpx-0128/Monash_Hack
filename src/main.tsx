@@ -3,6 +3,7 @@ import { createRoot } from "react-dom/client";
 import { App } from "./App";
 import { initialize } from "./api";
 import "./styles.css";
+import "./refinement.css";
 const root = createRoot(document.getElementById("root")!);
 root.render(
   <div className="startup" role="status">

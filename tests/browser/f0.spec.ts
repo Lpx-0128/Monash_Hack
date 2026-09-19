@@ -4,7 +4,7 @@ import AxeBuilder from "@axe-core/playwright";
 test.beforeEach(async ({ page }) => {
   await page.goto("/");
   await expect(
-    page.getByRole("heading", { name: "Keep shipments moving." }),
+    page.getByRole("heading", { name: "Shipment overview" }),
   ).toBeVisible();
   await expect(page.getByText("23", { exact: true }).first()).toBeVisible();
 });
@@ -37,11 +37,18 @@ test("overview, filters, evidence, sources, closed review boundary and replay po
   await expect(page.locator(".assessment").nth(1)).toContainText("OK");
   await expect(page.getByText("Manual override · Ungrounded")).toBeVisible();
   await expect(page.locator(".comparison-row")).toHaveCount(7);
-  await page.getByText("View evidence (1)", { exact: true }).first().click();
+  await page.locator(".matched-fields > summary").click();
+  const shipperEvidence = page
+    .locator(".comparison-row")
+    .filter({
+      has: page.getByRole("heading", { name: "Shipper", exact: true }),
+    });
+  await shipperEvidence
+    .getByText("View evidence (1)", { exact: true })
+    .first()
+    .click();
   await expect(
-    page
-      .locator(".comparison-row")
-      .first()
+    shipperEvidence
       .locator(".field-value")
       .first()
       .getByText(
@@ -50,7 +57,10 @@ test("overview, filters, evidence, sources, closed review boundary and replay po
       ),
   ).toBeVisible();
   const popupPromise = context.waitForEvent("page");
-  await page.getByRole("link", { name: "Open source ↗" }).first().click();
+  await shipperEvidence
+    .getByRole("link", { name: "Open source ↗" })
+    .first()
+    .click();
   const popup = await popupPromise;
   await expect(popup.locator("body")).toContainText("SYNTHETIC DEMONSTRATION");
   await expect(popup.locator("body")).toContainText(
@@ -284,6 +294,8 @@ test("participant-shaped synthetic context, fictional receipt time and unresolve
     if (m.type() === "error") errors.push(m.text());
   });
   await page.goto("/cases/demo_match");
+  await page.locator(".operations-details > summary").click();
+  await page.locator(".matched-fields > summary").click();
   await expect(page.getByText(/Fictional fixture receipt time:/)).toBeVisible();
   await expect(
     page.getByText("Participant receipt time is unavailable.", { exact: true }),
@@ -347,6 +359,7 @@ test("participant-shaped synthetic context, fictional receipt time and unresolve
     fullPage: true,
   });
   await page.goto("/cases/demo_no-attachment-intent");
+  await page.locator(".operations-details > summary").click();
   await expect(
     page.getByText("No-attachment intent remains unresolved", { exact: true }),
   ).toBeVisible();

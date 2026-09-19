@@ -1,4 +1,5 @@
 import { ReviewActions } from "./ReviewActions";
+import { CaseProgress } from "./CaseProgress";
 import { useEffect, useState, type ReactNode } from "react";
 import {
   Anchor,
@@ -216,7 +217,10 @@ export function App({
     [fault, setFault] = useState(initialFault),
     [decisionFault, setDecisionFault] = useState(initialDecisionFault);
   const retry = () => setRefresh((v) => v + 1),
-    isCases = path.startsWith("/cases");
+    isCases = path.startsWith("/cases"),
+    isQueue =
+      path.startsWith("/cases?") &&
+      new URLSearchParams(path.split("?")[1]).get("has_open_review") === "true";
   async function control(
     action: "reset" | "advance" | "fault" | "decision-fault",
     body: object = {},
@@ -261,12 +265,15 @@ export function App({
           </Link>
           <Link
             to="/cases"
-            className={isCases ? "nav-link active" : "nav-link"}
+            className={isCases && !isQueue ? "nav-link active" : "nav-link"}
           >
             <ListFilter size={19} aria-hidden="true" />
             All cases
           </Link>
-          <Link to="/cases?has_open_review=true" className="nav-link">
+          <Link
+            to="/cases?has_open_review=true"
+            className={isQueue ? "nav-link active" : "nav-link"}
+          >
             <CircleHelp size={19} aria-hidden="true" />
             Review queue
           </Link>
@@ -283,7 +290,7 @@ export function App({
                 : "Synthetic documents. Isolated demo session. No real shipments."
               : "Server-authorized cases only."}
           </p>
-          <span className="contract-label">SHARED CONTRACT v2.1.1</span>
+          <span className="contract-label">DOCUMENT REVIEW · HARBOR</span>
         </div>
       </aside>
       <div className="workspace">
@@ -318,7 +325,8 @@ export function App({
               <strong>Simulation controls</strong>
               <p>
                 Seeded processing examples stay inspectable until advanced.
-                Replays finish after 8 seconds. {sharedTelegramDemo
+                Replays finish after 8 seconds.{" "}
+                {sharedTelegramDemo
                   ? "Resets affect the shared dashboard and Telegram demo."
                   : "Resets affect only this browser session."}
               </p>
@@ -471,11 +479,9 @@ function Overview({ refresh, retry }: { refresh: number; retry: () => void }) {
     <>
       <div className="page-heading">
         <div>
-          <div className="eyebrow">YOUR OPERATIONS, AT A GLANCE</div>
-          <h1>Keep shipments moving.</h1>
-          <p>
-            A clear view of what’s settled, what needs you, and what comes next.
-          </p>
+          <div className="eyebrow">OPERATIONS / DOCUMENT REVIEW</div>
+          <h1>Shipment overview</h1>
+          <p>Every case in view. A clear next step for every exception.</p>
         </div>
         <Link to="/cases" className="button primary">
           Explore cases <ArrowRight size={17} aria-hidden="true" />
@@ -486,7 +492,7 @@ function Overview({ refresh, retry }: { refresh: number; retry: () => void }) {
         <div>
           <strong>
             {isSimulation
-              ? "A safe place to rehearse."
+              ? "Demonstration workspace."
               : "Current authorized scope."}
           </strong>{" "}
           {isSimulation
@@ -502,7 +508,7 @@ function Overview({ refresh, retry }: { refresh: number; retry: () => void }) {
             <Metric
               title="Total cases"
               value={s.total_cases}
-              note="Latest run per DEMO case"
+              note="Current run for every case"
             />
             <Metric
               title="Pending decisions"
@@ -522,116 +528,143 @@ function Overview({ refresh, retry }: { refresh: number; retry: () => void }) {
               warning={s.by_workflow.FAILED > 0}
             />
           </div>
-          <div className="overview-grid">
-            <Panel
-              title="Attention queue"
-              subtitle="The next step is always explicit."
-              action={
-                <Link to="/cases?has_open_review=true">
-                  View queue <ArrowRight size={14} aria-hidden="true" />
-                </Link>
-              }
-            >
-              {queue.length ? (
-                <div className="attention-list">
-                  {queue.slice(0, 4).map((c) => (
-                    <Link
-                      to={`/cases/${c.case_id}`}
-                      key={c.case_id}
-                      className="attention-item"
-                    >
-                      <span
-                        className={`queue-icon ${c.workflow_status === "BLOCKED_EXTERNAL" ? "external" : ""}`}
+          <div className="focus-banner">
+            <div>
+              <span className="eyebrow">YOUR NEXT STEP</span>
+              <h2>
+                {queue.length
+                  ? `${queue.length} cases need a decision`
+                  : "No pending decisions"}
+              </h2>
+              <p>
+                {queue.length
+                  ? "Review source evidence and resolve the values that need your input."
+                  : "Check external follow-ups and processing states below."}
+              </p>
+            </div>
+            <Link to="/cases?has_open_review=true" className="button primary">
+              Review queue <ArrowRight size={16} aria-hidden="true" />
+            </Link>
+          </div>
+          <OverviewCases cases={cases} />
+          <details className="operations-details">
+            <summary>
+              Operational insights{" "}
+              <span>Queues, workflow distribution & assessment history</span>
+            </summary>
+            <div className="overview-grid">
+              <Panel
+                title="Attention queue"
+                subtitle="The next step is always explicit."
+                action={
+                  <Link to="/cases?has_open_review=true">
+                    View queue <ArrowRight size={14} aria-hidden="true" />
+                  </Link>
+                }
+              >
+                {queue.length ? (
+                  <div className="attention-list">
+                    {queue.slice(0, 4).map((c) => (
+                      <Link
+                        to={`/cases/${c.case_id}`}
+                        key={c.case_id}
+                        className="attention-item"
                       >
-                        <CircleHelp size={20} aria-hidden="true" />
-                      </span>
+                        <span
+                          className={`queue-icon ${c.workflow_status === "BLOCKED_EXTERNAL" ? "external" : ""}`}
+                        >
+                          <CircleHelp size={20} aria-hidden="true" />
+                        </span>
+                        <div>
+                          <strong>{c.subject}</strong>
+                          <small>
+                            {c.case_id
+                              .replace("demo_", "")
+                              .replaceAll("-", " ")}{" "}
+                            · {c.from}
+                          </small>
+                        </div>
+                        <ArrowRight size={17} aria-hidden="true" />
+                      </Link>
+                    ))}
+                  </div>
+                ) : (
+                  <Empty title="No pending decisions">
+                    Acknowledged external blocks remain visible in the workflow
+                    summary.
+                  </Empty>
+                )}
+                <div className="panel-foot">
+                  <span className="dot amber" />
+                  {acknowledged} acknowledged external{" "}
+                  {acknowledged === 1 ? "block" : "blocks"} · follow-up still
+                  needed
+                </div>
+              </Panel>
+              <Panel
+                title="Workflow distribution"
+                subtitle="Processing state, independent of the verdict."
+              >
+                <div className="workflow-list">
+                  {workflows.map((w) => (
+                    <Link
+                      className="workflow-row"
+                      to={`/cases?workflow_status=${w}`}
+                      key={w}
+                    >
                       <div>
-                        <strong>{c.subject}</strong>
-                        <small>
-                          {c.case_id.replace("demo_", "").replaceAll("-", " ")}{" "}
-                          · {c.from}
-                        </small>
+                        <span className={`dot ${w.toLowerCase()}`} />
+                        {human(w)}
+                        <strong>{s.by_workflow[w]}</strong>
                       </div>
-                      <ArrowRight size={17} aria-hidden="true" />
+                      <div className="bar-track">
+                        <span
+                          className={w.toLowerCase()}
+                          style={{
+                            width: `${s.total_cases ? (s.by_workflow[w] / s.total_cases) * 100 : 0}%`,
+                          }}
+                        />
+                      </div>
                     </Link>
                   ))}
                 </div>
-              ) : (
-                <Empty title="No pending decisions">
-                  Acknowledged external blocks remain visible in the workflow
-                  summary.
-                </Empty>
-              )}
-              <div className="panel-foot">
-                <span className="dot amber" />
-                {acknowledged} acknowledged external{" "}
-                {acknowledged === 1 ? "block" : "blocks"} · follow-up still
-                needed
-              </div>
-            </Panel>
-            <Panel
-              title="Workflow distribution"
-              subtitle="Processing state, independent of the verdict."
-            >
-              <div className="workflow-list">
-                {workflows.map((w) => (
-                  <Link
-                    className="workflow-row"
-                    to={`/cases?workflow_status=${w}`}
-                    key={w}
-                  >
-                    <div>
-                      <span className={`dot ${w.toLowerCase()}`} />
-                      {human(w)}
-                      <strong>{s.by_workflow[w]}</strong>
-                    </div>
-                    <div className="bar-track">
-                      <span
-                        className={w.toLowerCase()}
-                        style={{
-                          width: `${s.total_cases ? (s.by_workflow[w] / s.total_cases) * 100 : 0}%`,
-                        }}
-                      />
-                    </div>
-                  </Link>
-                ))}
-              </div>
-            </Panel>
-          </div>
-          <div className="outcome-grid">
-            <StatusPanel
-              title="Frozen machine assessment"
-              subtitle="The original automated result is never rewritten."
-              counts={s.by_machine_status}
-              extra={`${s.unclassified} unclassified · ${s.total_cases - Object.values(s.by_machine_status).reduce((a, b) => a + b, 0)} not assessed`}
-            />
-            <StatusPanel
-              title="Current operational outcome"
-              subtitle="Latest applied resolution, or the machine result."
-              counts={s.by_effective_status}
-              extra="Processing and failure stay visible independently."
-            />
-          </div>
-          <div className="facts-strip">
-            <span>
-              <strong>{s.ai_assisted_cases}</strong> AI-assisted runs{" "}
-              <small>
-                {isSimulation ? "No AI calls in this simulation" : ""}
-              </small>
-            </span>
-            <span>
-              <strong>{s.bl_comparison.total}</strong> assessed BL comparisons
-            </span>
-            <span>
-              <strong>
-                {s.avg_processing_ms === null
-                  ? "—"
-                  : `${Math.round(s.avg_processing_ms)} ms`}
-              </strong>{" "}
-              mean active processing{" "}
-              <small>{isSimulation ? "Synthetic fixture metric" : ""}</small>
-            </span>
-          </div>
+              </Panel>
+            </div>
+            <div className="outcome-grid">
+              <StatusPanel
+                title="Frozen machine assessment"
+                subtitle="The original automated result is never rewritten."
+                counts={s.by_machine_status}
+                extra={`${s.unclassified} unclassified · ${s.total_cases - Object.values(s.by_machine_status).reduce((a, b) => a + b, 0)} not assessed`}
+              />
+              <StatusPanel
+                title="Current operational outcome"
+                subtitle="Latest applied resolution, or the machine result."
+                counts={s.by_effective_status}
+                extra="Processing and failure stay visible independently."
+              />
+            </div>
+            <div className="facts-strip">
+              <span>
+                <strong>{s.ai_assisted_cases}</strong> AI-assisted runs{" "}
+                <small>
+                  {isSimulation ? "No AI calls in this simulation" : ""}
+                </small>
+              </span>
+              <span>
+                <strong>{s.bl_comparison.total}</strong> assessed BL comparisons
+              </span>
+              <span>
+                <strong>
+                  {s.avg_processing_ms === null
+                    ? "—"
+                    : `${Math.round(s.avg_processing_ms)} ms`}
+                </strong>{" "}
+                mean active processing{" "}
+                <small>{isSimulation ? "Synthetic fixture metric" : ""}</small>
+              </span>
+            </div>
+          </details>
           <div className="sync-line">
             <span className="dot completed" />{" "}
             {error ? "Last successful refresh" : "Polling every 3 seconds"} ·{" "}
@@ -642,6 +675,104 @@ function Overview({ refresh, retry }: { refresh: number; retry: () => void }) {
     </>
   );
 }
+function OverviewCases({ cases }: { cases: CaseSummary[] }) {
+  const [filter, setFilter] = useState("All cases");
+  const [search, setSearch] = useState("");
+  const [category, setCategory] = useState("");
+  const groups: Record<string, (c: CaseSummary) => boolean> = {
+    "All cases": () => true,
+    "Needs input": (c) => c.has_open_review,
+    Discrepancies: (c) => c.final_status === "MISMATCH" || c.mismatch_count > 0,
+    Matched: (c) =>
+      c.category === "BL_COMPARISON" &&
+      c.final_status === "OK" &&
+      c.workflow_status === "COMPLETED",
+    "Awaiting external": (c) => c.workflow_status === "BLOCKED_EXTERNAL",
+    Processing: (c) => c.workflow_status === "PROCESSING",
+    Failed: (c) => c.workflow_status === "FAILED",
+  };
+  const scoped = cases.filter(
+    (c) =>
+      (!category || c.category === category) &&
+      `${c.subject} ${c.from} ${c.case_id}`
+        .toLowerCase()
+        .includes(search.toLowerCase()),
+  );
+  const visible = scoped.filter(groups[filter]);
+  return (
+    <Panel
+      title="Case overview"
+      subtitle="Select a review state, then open a case to inspect its evidence."
+    >
+      <div className="overview-tools">
+        <label>
+          Search overview
+          <input
+            type="search"
+            placeholder="Shipment, sender or case ID"
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+          />
+        </label>
+        <label>
+          Email category
+          <select
+            value={category}
+            onChange={(e) => setCategory(e.target.value)}
+          >
+            <option value="">All categories</option>
+            {categories.map((value) => (
+              <option key={value} value={value}>
+                {human(value)}
+              </option>
+            ))}
+          </select>
+        </label>
+      </div>
+      <div className="case-tabs" aria-label="Filter overview by review state">
+        {Object.entries(groups).map(([label, predicate]) => (
+          <button
+            key={label}
+            aria-pressed={filter === label}
+            onClick={() => setFilter(label)}
+          >
+            {label}
+            <span>{scoped.filter(predicate).length}</span>
+          </button>
+        ))}
+      </div>
+      <div className="case-table">
+        <div className="case-table-head">
+          <span>Shipment / sender</span>
+          <span>Workflow</span>
+          <span>Machine / operational</span>
+          <span>Next step / updated</span>
+        </div>
+        {visible.length ? (
+          visible.map((c) => <CaseRow key={c.case_id} c={c} />)
+        ) : (
+          <Empty title="No matching cases">
+            Choose another category or clear your search.
+          </Empty>
+        )}
+      </div>
+      <div className="panel-foot" role="status">
+        {visible.length} of {cases.length} cases · Filters can overlap when a
+        discrepancy also needs input.
+      </div>
+    </Panel>
+  );
+}
+
+function nextStep(c: CaseSummary) {
+  if (c.workflow_status === "FAILED") return "Operator recovery required";
+  if (c.workflow_status === "PROCESSING") return "Processing · awaiting result";
+  if (c.has_open_review) return "Review evidence & respond";
+  if (c.workflow_status === "BLOCKED_EXTERNAL") return "Obtain external source";
+  if (c.final_status === "MISMATCH") return "Request corrected documents";
+  return "No review pending";
+}
+
 function Metric({
   title,
   value,
@@ -873,6 +1004,7 @@ function CaseRow({ c }: { c: CaseSummary }) {
         </span>
       </div>
       <div>
+        <strong className="next-step">{nextStep(c)}</strong>
         <span className={c.has_open_review ? "review-open" : "muted"}>
           {c.has_open_review ? "● Open review" : "No open review"}
         </span>
@@ -960,7 +1092,7 @@ function Detail({
             <span className="mono">Run: {c.run.run_id}</span>
             {c.completed_at && <span>Completed {date(c.completed_at)}</span>}
           </div>
-          {isSimulation && <SyntheticEmailContext c={c} />}
+          <CaseProgress c={c} />
           {c.failure && (
             <div className="notice error" role="alert">
               <TriangleAlert size={22} aria-hidden="true" />
@@ -1034,71 +1166,63 @@ function Detail({
               <small>Always read alongside the workflow status above.</small>
             </section>
           </div>
-          {c.review && (
-            <ReviewPanel c={c} onCase={replace} onBusy={setPending} />
-          )}{" "}
-          {c.follow_up === "CORRECTION_REQUIRED" && (
-            <div className="notice warning">
-              <TriangleAlert size={21} aria-hidden="true" />
-              <div>
-                <strong>External correction required</strong>
-                <p>
-                  A dependable discrepancy remains. Obtain corrected documents;
-                  this is not an approval review.
-                </p>
-              </div>
-            </div>
-          )}
-          <Panel
-            title="Document comparison"
-            subtitle={
-              c.fields.length
-                ? "SI is the reference · BL is the draft · expand evidence to verify a value."
-                : c.email.category && c.email.category !== "BL_COMPARISON"
-                  ? "Not applicable to this email category."
-                  : "Comparison fields are not available yet."
-            }
-            action={
-              <span className="subtle-chip">
-                {c.fields.length} /{" "}
-                {c.email.category === "BL_COMPARISON" ? 7 : 0} fields
-              </span>
-            }
-          >
-            {c.fields.length ? (
-              <div className="comparison-table">
-                <div className="comparison-head">
-                  <span>Canonical field</span>
-                  <span>Shipping instruction · SI</span>
-                  <span>Draft bill of lading · BL</span>
-                  <span>Comparison</span>
+          <div className={`review-workspace ${c.review ? "has-decision" : ""}`}>
+            <div className="decision-column">
+              {c.review && (
+                <ReviewPanel c={c} onCase={replace} onBusy={setPending} />
+              )}{" "}
+              {c.follow_up === "CORRECTION_REQUIRED" && (
+                <div className="notice warning">
+                  <TriangleAlert size={21} aria-hidden="true" />
+                  <div>
+                    <strong>External correction required</strong>
+                    <p>
+                      A dependable discrepancy remains. Obtain corrected
+                      documents; this is not an approval review.
+                    </p>
+                  </div>
                 </div>
-                {c.fields.map((f) => (
-                  <article className="comparison-row" key={f.field}>
-                    <h3>{fieldTitles[f.field]}</h3>
-                    <Value value={f.si} side="SI" />
-                    <Value value={f.bl} side="BL" />
-                    <div>
-                      <Badge value={f.result} />
-                      {f.not_comparable_cause && (
-                        <small>{human(f.not_comparable_cause)}</small>
-                      )}
-                    </div>
-                  </article>
-                ))}
-              </div>
-            ) : (
-              <Empty
-                title={
-                  c.email.category && c.email.category !== "BL_COMPARISON"
-                    ? "No comparison required"
-                    : "Waiting for comparison data"
-                }
-              >
-                No placeholder values or verdicts are invented.
-              </Empty>
-            )}
-          </Panel>
+              )}
+            </div>
+            <Panel
+              title="Document comparison"
+              subtitle={
+                c.fields.length
+                  ? "SI is the reference · BL is the draft · expand evidence to verify a value."
+                  : c.email.category && c.email.category !== "BL_COMPARISON"
+                    ? "Not applicable to this email category."
+                    : "Comparison fields are not available yet."
+              }
+              action={
+                <span className="subtle-chip">
+                  {c.fields.length} /{" "}
+                  {c.email.category === "BL_COMPARISON" ? 7 : 0} fields
+                </span>
+              }
+            >
+              {c.fields.length ? (
+                <div className="comparison-table">
+                  <div className="comparison-head">
+                    <span>Canonical field</span>
+                    <span>Shipping instruction · SI</span>
+                    <span>Draft bill of lading · BL</span>
+                    <span>Comparison</span>
+                  </div>
+                  <ComparisonFields c={c} />
+                </div>
+              ) : (
+                <Empty
+                  title={
+                    c.email.category && c.email.category !== "BL_COMPARISON"
+                      ? "No comparison required"
+                      : "Waiting for comparison data"
+                  }
+                >
+                  No placeholder values or verdicts are invented.
+                </Empty>
+              )}
+            </Panel>
+          </div>
           <div className="detail-bottom">
             <Panel
               title="Original documents"
@@ -1164,11 +1288,71 @@ function Detail({
               </ol>
             </Panel>
           </div>
+          {isSimulation && (
+            <details className="operations-details">
+              <summary>
+                Synthetic email context{" "}
+                <span>Source correspondence & receipt-time details</span>
+              </summary>
+              <SyntheticEmailContext c={c} />
+            </details>
+          )}
         </>
       )}
     </>
   );
 }
+function ComparisonFields({ c }: { c: Case }) {
+  // Keep human-applied values visible so the coordinator can verify the outcome.
+  const needsAttention = (f: Case["fields"][number]) =>
+    f.result !== "MATCH" ||
+    [f.si, f.bl].some(
+      (v) => v != null && v.value_origin !== "DOCUMENT_EXTRACTED",
+    ) ||
+    (c.review?.status === "OPEN" && c.review.field === f.field);
+  const attention = c.fields.filter(needsAttention);
+  const matched = c.fields.filter((f) => !needsAttention(f));
+  const row = (f: Case["fields"][number]) => (
+    <article
+      className={`comparison-row ${f.result !== "MATCH" ? "needs-attention" : ""}`}
+      key={f.field}
+    >
+      <h3>{fieldTitles[f.field]}</h3>
+      <Value value={f.si} side="SI" />
+      <Value value={f.bl} side="BL" />
+      <div>
+        <Badge value={f.result} />
+        {f.not_comparable_cause && (
+          <small>{human(f.not_comparable_cause)}</small>
+        )}
+      </div>
+    </article>
+  );
+  return (
+    <>
+      {attention.length ? (
+        attention.map(row)
+      ) : (
+        <p className="comparison-clear">
+          <Check size={17} aria-hidden="true" />
+          All available fields match. Expand the matching fields to inspect
+          their evidence.
+        </p>
+      )}
+      {matched.length > 0 && (
+        <details className="matched-fields">
+          <summary>
+            {matched.length} matching{" "}
+            {matched.length === 1 ? "field" : "fields"}
+            <span>Expand SI, BL & source evidence</span>
+          </summary>
+          {matched.map(row)}
+        </details>
+      )}
+    </>
+  );
+}
+
 function SyntheticEmailContext({ c }: { c: Case }) {
   const context = [...c.history]
     .reverse()
