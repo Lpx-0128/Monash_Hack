@@ -10,6 +10,8 @@ import logging
 from pathlib import Path
 
 PIN = "44945d224c2ccd6e0a55f16223c7ab0dd39331bf"
+_active_application = None
+_active_task = None
 
 def preserve_pending_updates(adapter):
     """Pinned, instance-local policy for the dedicated long-polling gateway.
@@ -35,6 +37,7 @@ def register(ctx):
     ctx.register_platform_handler("telegram", wire)
 
 def wire(application, adapter):
+    global _active_application, _active_task
     preserve_pending_updates(adapter)
     from telegram import InlineKeyboardButton, InlineKeyboardMarkup
     from telegram.ext import CallbackQueryHandler, MessageHandler, TypeHandler, ApplicationHandlerStop, filters
@@ -53,6 +56,8 @@ def wire(application, adapter):
     allowed = {(x["actor"], x["chat"]) for x in json.loads(os.environ.get("F2_RECIPIENTS", "[]"))}
 
     async def receive(update, context):
+        if application is not _active_application:
+            raise ApplicationHandlerStop
         user, message = update.effective_user, update.effective_message
         if user and message and not user.is_bot:
             actor, chat = str(user.id), str(message.chat_id)
@@ -108,6 +113,25 @@ def wire(application, adapter):
                 return web.json_response({"error": "Telegram delivery unavailable"}, status=503)
         app = web.Application(client_max_size=12_000_000)
         app.router.add_post("/send", send)
+        interpreting = asyncio.Lock()
+        async def interpret_request(request):
+            if request.headers.get('Authorization') != 'Bearer ' + secret:
+                return web.json_response({'error':'unauthorized'}, status=401)
+            if os.environ.get('F3_ENABLED') != 'true':
+                return web.json_response({'error':'interpretation disabled'}, status=503)
+            if interpreting.locked():
+                return web.json_response({'error':'interpretation busy'}, status=429)
+            try:
+                if request.content_length is None or request.content_length > 16000:
+                    return web.json_response({'error':'invalid context'}, status=400)
+                payload=await request.json()
+                from .interpretation import interpret
+                async with interpreting:
+                    result=await asyncio.wait_for(asyncio.to_thread(interpret,payload), timeout=22)
+                return web.json_response(result)
+            except Exception:
+                return web.json_response({'error':'Copilot interpretation unavailable; use review controls'}, status=503)
+        app.router.add_post('/interpret', interpret_request)
         runner = web.AppRunner(app, access_log=None)
         await runner.setup()
         try:
@@ -126,5 +150,20 @@ def wire(application, adapter):
                     await asyncio.sleep(1)
         finally:
             await runner.cleanup()
+    previous = _active_task
+    _active_application = application
+    async def own_bridge():
+        try:
+            # Hermes can abandon an application whose network shutdown hung.
+            # Release its local port/queue before the replacement takes ownership.
+            if previous and not previous.done():
+                previous.cancel()
+                try:
+                    await previous
+                except asyncio.CancelledError:
+                    pass
+            await run()
+        finally:
             db.close()
-    application.bot_data['shipping_task'] = asyncio.create_task(run(), name="shipping-review-bridge")
+    _active_task = asyncio.create_task(own_bridge(), name="shipping-review-bridge")
+    application.bot_data['shipping_task'] = _active_task

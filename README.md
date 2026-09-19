@@ -100,3 +100,7 @@ Use a single always-running instance with a persistent writable state directory 
 **Real-backend F1 acceptance remains outstanding.** No real service or trusted live actor integration is configured. Live decision UI is explicitly unavailable until that identity integration is provided; the shared adapter method is implemented. Synthetic grounding, restart and race tests do not prove production extraction, durability or authorization. Hosted deployment and Docker execution retain their outstanding F0 gates.
 
 Hermes/Telegram belongs to F2. Real document extraction, private dataset evaluation and production recovery infrastructure are outside this milestone. The authoritative documents are under [docs/](docs/README.md); old root copies are preserved in Git history and a local pre-F1 backup.
+
+## Hermes interpretation (F3)
+
+Optional Copilot interpretation is implemented on the feature branch. See [setup and walkthrough](docs/F3-setup.md), [acceptance](docs/F3-acceptance.md), and [measured verification](docs/F3-verification.md). Real-backend pipeline verification remains outstanding. F2 buttons and explicit values remain usable without a model.

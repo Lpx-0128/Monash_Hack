@@ -8,9 +8,15 @@ import {
 } from "node:fs";
 import { dirname } from "node:path";
 import type { Case, DecisionRequest } from "../shared/types";
-import { parseProposal } from "../shared/decisions";
 import { effectiveStatus } from "../shared/validation";
 import { ReviewApi, RemoteError } from "./api";
+import {
+  interpretationInput,
+  interpretationGuard,
+  interpretedDecision,
+  deterministicValue,
+  type Interpreter,
+} from "./interpretation";
 
 export type Recipient = { actor: string; chat: string; operator?: boolean };
 export type Incoming = {
@@ -32,6 +38,7 @@ export interface Transport {
 }
 type Binding = Recipient & { caseId: string; review: string; run: string };
 type Proposal = Binding & {
+  interpretation_source?: "deterministic" | "Copilot interpretation";
   decision: DecisionRequest;
   phase:
     "preview" | "override" | "sending" | "done" | "cancelled" | "uncertain";
@@ -104,6 +111,7 @@ export class ReviewEngine {
     public transport: Transport,
     private dashboard: string,
     private now = Date.now,
+    private interpret?: Interpreter,
   ) {
     this.state = existsSync(file)
       ? JSON.parse(readFileSync(file, "utf8"))
@@ -200,12 +208,14 @@ export class ReviewEngine {
     b: Binding,
     d: DecisionRequest,
     phase: "preview" | "override" = "preview",
+    source: "deterministic" | "Copilot interpretation" = "deterministic",
   ) {
     this.invalidate(b);
     const id = token();
     this.state.proposals[id] = {
       ...cleanBinding(b),
       decision: d,
+      interpretation_source: source,
       phase,
       updated: this.now(),
     };
@@ -220,10 +230,18 @@ export class ReviewEngine {
     const proposed =
       typeof value === "object" && value?.kind === "VALUE"
         ? value.value.normalized
-        : value;
+        : typeof value === "object"
+          ? value?.label
+          : value;
+    const description =
+      d.action === "ACKNOWLEDGE"
+        ? "Acknowledge external action; this does not complete verification."
+        : d.action === "SELECT_OPTION"
+          ? `${r.target_role ? `Assign ${r.target_role} document` : `${r.side} ${r.field}`}: ${String(proposed)}${r.field === "gross_weight_kg" ? " kg" : ""}`
+          : `${r.side} ${r.field}: ${String(proposed)}${r.field === "gross_weight_kg" ? " kg" : ""}`;
     await this.sendButtons(
       b,
-      `${phase === "override" ? "This value cannot be verified from the source. Confirm an ungrounded manual override?" : "Confirm canonical value"}\n${r.side} ${r.field}: ${String(proposed)}${r.field === "gross_weight_kg" ? " kg" : ""}\nCase ${b.caseId}\nReview ${b.review}\nRun ${b.run}\n${this.link(b)}`,
+      `${phase === "override" ? "This value cannot be verified from the source. Confirm an ungrounded manual override?" : "Confirm canonical value"}\n${description}\nInterpretation: ${source}. Proposal only; no decision submitted.\nCase ${b.caseId}\nReview ${b.review}\nRun ${b.run}\n${this.link(b)}`,
       [
         [
           this.button(
@@ -444,19 +462,66 @@ export class ReviewEngine {
         const c = await this.current(b),
           r = c.review!;
         this.invalidate(b);
-        if (r.ui_mode !== "VALUE_INPUT" || !r.field || !r.side) {
-          await this.tell(b, "Use this review’s action buttons.");
+        const text = u.text ?? "";
+        const guard = interpretationGuard(c, text);
+        if (guard) {
+          await this.tell(b, guard);
           return;
         }
-        const value = parseProposal(r.field, u.text ?? "");
+        let value: string | number | undefined;
+        if (r.ui_mode === "VALUE_INPUT" && r.field && r.side) {
+          try {
+            value = deterministicValue(c, text);
+          } catch {
+            /* Consider bounded interpretation below. */
+          }
+        }
+        if (value === undefined) {
+          if (!this.interpret) {
+            await this.tell(
+              b,
+              "Use a canonical value or the review buttons. Natural-language interpretation is unavailable.",
+            );
+            return;
+          }
+          await this.tell(
+            b,
+            "Interpreting this reply with Copilot. Nothing will be submitted without your confirmation.",
+          );
+          try {
+            const raw = await this.interpret(interpretationInput(c, text));
+            const fresh = await this.current(b);
+            const decision = interpretedDecision(fresh, b.actor, text, raw);
+            if (!decision) {
+              await this.tell(
+                b,
+                "Please clarify one value or option for this review, or use its buttons. No decision submitted.",
+              );
+              return;
+            }
+            await this.proposal(
+              b,
+              decision,
+              "preview",
+              "Copilot interpretation",
+            );
+          } catch (e) {
+            if (e instanceof RemoteError) throw e;
+            await this.tell(
+              b,
+              "Copilot could not produce a valid proposal. No decision submitted. Use a canonical value or the review buttons.",
+            );
+          }
+          return;
+        }
         await this.proposal(b, {
           review_id: b.review,
           run_id: b.run,
           actor_id: b.actor,
           channel: "TELEGRAM",
           action: "PROVIDE_VALUE",
-          field: r.field,
-          side: r.side,
+          field: r.field!,
+          side: r.side!,
           value,
           user_message: u.text,
         });

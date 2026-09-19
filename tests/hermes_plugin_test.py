@@ -118,6 +118,29 @@ async def main():
         assert received[-1]['id']=='6' and len(received)==4,'Unforwarded received update survives gateway restart'
         await app.process_update(event(6,text='duplicate after restart'));await asyncio.sleep(1.1)
         assert len(received)==4
+        # Recovery may abandon an application that still reports running.
+        old_app=app
+        old_calls=len(old_app.bot.request.calls)
+        os.environ['F2_BRIDGE_PORT']=str(old_app.bot_data['shipping_port'])
+        replacement_request=TelegramDouble()
+        app=Application.builder().token('999:synthetic-test-token').request(replacement_request).build()
+        await app.initialize();factory(app,SimpleNamespace(_start_polling_once=start_polling_once));await app.start()
+        for _ in range(40):
+            if 'shipping_port' in app.bot_data:break
+            await asyncio.sleep(.1)
+        assert app.bot_data['shipping_port']==old_app.bot_data['shipping_port'], 'Replacement must reclaim the same bridge port'
+        assert old_app.bot_data['shipping_task'].cancelled()
+        async with ClientSession() as client:
+            async with client.post(f"http://127.0.0.1:{app.bot_data['shipping_port']}/send",json={'chat':'101','text':'Recovered'},headers=headers) as r:assert r.status==200
+        assert any(a=='sendMessage' for a,_ in replacement_request.calls)
+        assert len(old_app.bot.request.calls)==old_calls, 'Never deliver through abandoned application'
+        await old_app.process_update(event(7,text='abandoned generation'))
+        await app.process_update(event(8,text='replacement generation'))
+        for _ in range(40):
+            if len(received)==5:break
+            await asyncio.sleep(.1)
+        assert received[-1]['id']=='8' and len(received)==5
+        await old_app.stop();await old_app.shutdown()
         await app.stop();await app.bot_data['shipping_task'];await app.shutdown();await runner.cleanup()
         print('PASS: actual Hermes plugin registration + PTB identity/reply/callback dispatch, SQLite dedup/pairing, restricted fallback, native buttons/doc delivery IDs, gateway application restart/outage recovery. Telegram network mocked; NOT a live handshake.')
 

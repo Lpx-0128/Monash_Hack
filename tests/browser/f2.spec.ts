@@ -7,7 +7,7 @@ import type { AddressInfo } from "node:net";
 import { createApp } from "../../server/app";
 import { ReviewApi } from "../../interaction/api";
 import { ReviewEngine, type Button } from "../../interaction/engine";
-test("F2 routed Telegram transport double → real API → processing and dashboard outcome", async ({
+for (const interpreted of [false, true]) test(`${interpreted ? "F3 interpreted" : "F2 routed"} Telegram transport double → real API → processing and dashboard outcome`, async ({
   page,
 }) => {
   const token = "browser-test-service-token-00000000000",
@@ -40,6 +40,8 @@ test("F2 routed Telegram transport double → real API → processing and dashbo
           },
         },
         base,
+        Date.now,
+        interpreted ? async () => ({ status: 'PROPOSE', action: 'PROVIDE_VALUE', field: 'gross_weight_kg', side: 'BL', target_role: null, value: 21707, option_id: null, reason: 'Synthetic model double' }) : undefined,
       );
     await page.goto(base + "/cases/demo_grounded-input");
     await expect(page.locator("footer")).toContainText("Shared synthetic demo");
@@ -69,9 +71,11 @@ test("F2 routed Telegram transport double → real API → processing and dashbo
       chat: "101",
       message: "incoming",
       reply: d.message,
-      text: "21707",
+      text: interpreted ? "twenty-one thousand seven hundred and seven kilos" : "21707",
     });
     const proposal = messages.at(-1)!;
+    expect((await api.get(c.case_id)).review?.status).toBe('OPEN');
+    if (interpreted) expect(proposal.text).toContain('Copilot interpretation');
     await engine.inbound({
       id: "2",
       actor: "101",

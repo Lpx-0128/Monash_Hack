@@ -82,6 +82,22 @@ const engine = new ReviewEngine(
     document: (chat, file) => outbound({ chat, ...file }),
   },
   required("F2_DASHBOARD_URL"),
+  Date.now,
+  process.env.F3_ENABLED === "true"
+    ? async (input) => {
+        const response = await fetch(bridge + "/interpret", {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${secret}`,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify(input),
+          signal: AbortSignal.timeout(25000),
+        });
+        if (!response.ok) throw new Error("Copilot interpretation unavailable");
+        return response.json();
+      }
+    : undefined,
 );
 const app = express();
 app.use(express.json({ limit: "32kb" }));
