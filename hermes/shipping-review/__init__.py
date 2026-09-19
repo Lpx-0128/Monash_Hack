@@ -101,6 +101,18 @@ def wire(application, adapter):
                 chat = str(body["chat"])
                 if chat not in {c for _, c in allowed}:
                     return web.json_response({"error": "chat not authorized"}, status=403)
+                if "message" in body:
+                    from telegram.error import BadRequest
+                    rows = [[InlineKeyboardButton(b["text"], callback_data=b["callback_data"]) for b in row] for row in body.get("buttons", [])]
+                    markup = InlineKeyboardMarkup(rows)
+                    try:
+                        if "text" in body:
+                            await application.bot.edit_message_text(chat_id=chat, message_id=int(body["message"]), text=body["text"], reply_markup=markup, parse_mode=None)
+                        else:
+                            await application.bot.edit_message_reply_markup(chat_id=chat, message_id=int(body["message"]), reply_markup=markup)
+                    except BadRequest as error:
+                        if "message is not modified" not in str(error).lower(): raise
+                    return web.json_response({"message": str(body["message"])})
                 if "data" in body:
                     data = base64.b64decode(body["data"], validate=True)
                     if len(data) > 8_000_000: raise ValueError()

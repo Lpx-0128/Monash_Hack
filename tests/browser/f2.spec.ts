@@ -35,6 +35,11 @@ for (const interpreted of [false, true]) test(`${interpreted ? "F3 interpreted" 
             messages.push({ id, text, buttons });
             return id;
           },
+          async edit(_chat, message, buttons, text) {
+            const existing = messages.find(m => m.id === message)!;
+            existing.buttons = buttons;
+            if (text) existing.text = text;
+          },
           async document() {
             return "document-test";
           },
@@ -83,6 +88,8 @@ for (const interpreted of [false, true]) test(`${interpreted ? "F3 interpreted" 
       message: proposal.id,
       callback: proposal.buttons[0][0].callback_data,
     });
+    expect(proposal.buttons.flat().map(b => b.text)).toEqual(["View details", "Open dashboard"]);
+    expect(proposal.text).toContain("Submitted");
     await page.reload();
     await expect(
       page.getByText("Processing", { exact: true }).first(),

@@ -37,6 +37,12 @@ export type Incoming = {
 };
 export type Button = { text: string; callback_data: string };
 export interface Transport {
+  edit?(
+    chat: string,
+    message: string,
+    buttons: Button[][],
+    text?: string,
+  ): Promise<void>;
   send(chat: string, text: string, buttons?: Button[][]): Promise<string>;
   document(
     chat: string,
@@ -65,6 +71,7 @@ type Delivery = Binding & {
   documentDue: number;
 };
 type State = {
+  cleanedButtons?: Record<string, { attempts: number; done: boolean }>;
   digestRequested?: string[];
   version: 1;
   mappings: Record<string, Binding>;
@@ -198,6 +205,75 @@ export class ReviewEngine {
         this.state.buttons[x.callback_data.slice(5)].message = message;
     this.save();
     return message;
+  }
+  async cleanButtons() {
+    if (!this.transport.edit) return;
+    const groups = new Map<
+      string,
+      { b: Binding; message: string; text?: string }
+    >();
+    for (const button of Object.values(this.state.buttons)) {
+      if (
+        !button.message ||
+        ["details", "dashboard", "show"].includes(button.action)
+      )
+        continue;
+      const p = button.proposal
+        ? this.state.proposals[button.proposal]
+        : undefined;
+      const done = Object.values(this.state.proposals).some(
+        (p) =>
+          p.phase === "done" &&
+          p.actor === button.binding.actor &&
+          p.chat === button.binding.chat &&
+          p.run === button.binding.run &&
+          p.review === button.binding.review,
+      );
+      if (!done && (!p || !["done", "cancelled"].includes(p.phase))) continue;
+      const key = `${button.binding.chat}/${button.message}`;
+      groups.set(key, {
+        b: button.binding,
+        message: button.message,
+        text: p
+          ? p.phase === "done"
+            ? "Submitted — response accepted. Processing may still be underway; check the current result below."
+            : "This proposal is closed — cancelled, replaced or rejected. Use the latest review or confirmation to continue."
+          : undefined,
+      });
+    }
+    let edits = 0;
+    for (const [key, target] of groups) {
+      const state = ((this.state.cleanedButtons ??= {})[key] ??= {
+        attempts: 0,
+        done: false,
+      });
+      if (state.done || state.attempts >= 5) continue;
+      if (++edits > 3) break;
+      const buttons = Object.entries(this.state.buttons)
+        .filter(
+          ([, b]) =>
+            b.binding.chat === target.b.chat &&
+            b.message === target.message &&
+            ["details", "dashboard"].includes(b.action),
+        )
+        .map(([id, b]) => ({
+          text: b.action === "details" ? "View details" : "Open dashboard",
+          callback_data: "ship:" + id,
+        }));
+      try {
+        await this.transport.edit(
+          target.b.chat,
+          target.message,
+          buttons.length ? [buttons] : [],
+          target.text,
+        );
+        state.done = true;
+      } catch {
+        state.attempts++;
+        // Cosmetic retries never replay a decision. Deleted messages eventually stop retrying.
+      }
+      this.save();
+    }
   }
   invalidate(b: Binding) {
     for (const p of Object.values(this.state.proposals))
@@ -571,6 +647,8 @@ export class ReviewEngine {
             ? errorCopy(e.code)
             : "Something interrupted this request. I haven’t automatically retried your decision. Check the current case through /reviews before trying again; if this continues, ask the operator to check the service.",
         );
+      } finally {
+        await this.cleanButtons();
       }
     });
   }
@@ -653,6 +731,7 @@ export class ReviewEngine {
   }
   tick() {
     return this.exclusive(async () => {
+      await this.cleanButtons();
       for (const p of Object.values(this.state.proposals))
         if (["sending", "uncertain"].includes(p.phase)) await this.reconcile(p);
       for (const recipient of this.recipients) {

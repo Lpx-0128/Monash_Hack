@@ -15,6 +15,22 @@ import {
 const secret = "test-only-service-credential-0000000000";
 class FakeTransport implements Transport {
   sendAttempts = 0;
+  failEdit = false;
+  edits: {
+    chat: string;
+    message: string;
+    buttons: Button[][];
+    text?: string;
+  }[] = [];
+  async edit(
+    chat: string,
+    message: string,
+    buttons: Button[][],
+    text?: string,
+  ) {
+    if (this.failEdit) throw new Error("Injected edit failure");
+    this.edits.push({ chat, message, buttons, text });
+  }
   messages: { id: string; chat: string; text: string; buttons: Button[][] }[] =
     [];
   files: { chat: string; filename: string; data: string }[] = [];
@@ -698,5 +714,51 @@ test("F2 notifier correction and operator-only failure, active-run queued rechec
     h.transport.messages
       .slice(n)
       .every((m) => !m.text.includes(old.run.run_id)),
+  );
+});
+
+test("Consumed confirmations disappear, retain navigation, and retry edits without repeating decisions", async (t) => {
+  const h = await setup(t);
+  const review = await h.review("grounded-input");
+  await h.input({ reply: review.id, text: "21707" });
+  const preview = h.transport.messages.at(-1)!;
+  await h.click("Cancel");
+  const cancelled = h.transport.edits.find((e) => e.message === preview.id)!;
+  assert.match(cancelled.text!, /closed/);
+  assert.deepEqual(
+    cancelled.buttons.flat().map((b) => b.text),
+    ["View details", "Open dashboard"],
+  );
+  assert.ok(
+    !h.transport.edits.some((e) => e.message === review.id),
+    "Cancel keeps the original review usable",
+  );
+  await h.input({ reply: review.id, text: "21707" });
+  const next = h.transport.messages.at(-1)!;
+  h.transport.failEdit = true;
+  await h.click("Confirm value");
+  assert.equal(
+    (await h.api.get("demo_grounded-input")).history.filter(
+      (e) => e.type === "DECISION_RECEIVED",
+    ).length,
+    1,
+  );
+  h.restart();
+  h.transport.failEdit = false;
+  await h.tick();
+  const submitted = h.transport.edits.find((e) => e.message === next.id)!;
+  assert.match(submitted.text!, /Submitted/);
+  assert.deepEqual(
+    submitted.buttons.flat().map((b) => b.text),
+    ["View details", "Open dashboard"],
+  );
+  assert.ok(h.transport.edits.some((e) => e.message === review.id));
+  const old = next.buttons.flat().find((b) => b.text === "Confirm value")!;
+  await h.input({ message: next.id, callback: old.callback_data });
+  assert.equal(
+    (await h.api.get("demo_grounded-input")).history.filter(
+      (e) => e.type === "DECISION_RECEIVED",
+    ).length,
+    1,
   );
 });

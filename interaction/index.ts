@@ -80,6 +80,9 @@ const engine = new ReviewEngine(
     send: (chat: string, text: string, buttons?: Button[][]) =>
       outbound({ chat, text, buttons }),
     document: (chat, file) => outbound({ chat, ...file }),
+    edit: async (chat, message, buttons, text) => {
+      await outbound({ chat, message, buttons, ...(text ? { text } : {}) });
+    },
   },
   required("F2_DASHBOARD_URL"),
   Date.now,

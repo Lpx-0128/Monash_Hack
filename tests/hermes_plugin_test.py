@@ -99,8 +99,13 @@ async def main():
             headers={'Authorization':'Bearer '+os.environ['F2_BRIDGE_TOKEN']}
             async with client.post(url,json={'chat':'101','text':'Synthetic review','buttons':[[{'text':'Confirm','callback_data':'ship:opaque'}]]},headers=headers) as r:assert r.status==200 and (await r.json())['message']
             async with client.post(url,json={'chat':'101','filename':'synthetic.txt','data':'U1lOVEhFVElD'},headers=headers) as r:assert r.status==200
+            async with client.post(url,json={'chat':'101','message':'77','text':'Submitted  -  processing continues','buttons':[[{'text':'View details','callback_data':'ship:details'}]]},headers=headers) as r:assert r.status==200
+            async with client.post(url,json={'chat':'101','message':'78','buttons':[]},headers=headers) as r:assert r.status==200
+            async with client.post(url,json={'chat':'202','message':'77','buttons':[]},headers=headers) as r:assert r.status==403
             async with client.post(url,json={'chat':'202','text':'must not send'},headers=headers) as r:assert r.status==403
             async with client.post(url,json={'chat':'101','text':'must not send'}) as r:assert r.status==401
+        assert any(a=='editMessageText' and p['message_id']==77 and 'Submitted' in p['text'] for a,p in request.calls)
+        assert any(a=='editMessageReplyMarkup' and p['message_id']==78 for a,p in request.calls)
         assert any(a=='sendDocument' for a,_ in request.calls)
         assert any(a=='sendMessage' and 'reply_markup' in p for a,p in request.calls)
         assert not any(a=='getUpdates' for a,_ in request.calls),'Plugin must not create a Telegram update consumer'

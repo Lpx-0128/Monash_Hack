@@ -32,6 +32,12 @@ Preparation does not approve unattended judge onboarding. PRD 2 §6.2 still requ
 
 Once PRD 1 is ready, obtain approved real DEMO fixtures/source access, backend URL, trusted actor integration, durable review/resumption endpoints and actual AI-processing evidence. Then repeat browser/Telegram decisions and concurrency/recovery against that backend, verify the public HTTPS prototype and phone access, rehearse the final release continuously, produce/play back the unedited backup recording, and check all submission links. **All of F4 remains incomplete until these required real-integration and recording gates pass.**
 
+## Telegram consumed-button cleanup — 20 September 2026
+
+Confirmed/cancelled/replaced proposals now have their action buttons removed, with a terminal status and retained details/dashboard controls. Accepted reviews also lose original action buttons; cancellation leaves the original review usable. Cleanup is persisted, bounded to three edits per pass and five attempts per message, and survives restart. Edit failure never resubmits a decision. Read-only callbacks retain their existing actor/chat/message/run checks.
+
+Verification: `npm run check` passed 68 application tests, TypeScript and build; after bounding cleanup batches, all 15 F2 tests passed again. The pinned native Hermes/PTB test passed including text/keyboard edits and unauthorized edit denial with mocked Telegram HTTP. Both browser F2/F3 transport-double → simulator → dashboard journeys passed (2/2), asserting removed confirmation buttons, retained navigation and completed outcome. Initial sandbox executions failed on Windows user-profile/dependency access; the same checks passed with permitted local execution. No live Telegram edit is claimed. Restart both router and dedicated gateway using setup instructions to activate this change; a live visual confirmation remains outstanding.
+
 ## Acceptance requirements retained
 
 These requirements remain enforced by the implementation/tests; the authoritative contract AC-01–AC-19 also includes wider integration gates.

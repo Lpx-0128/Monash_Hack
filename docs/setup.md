@@ -120,6 +120,8 @@ The deterministic Telegram flow needs no LLM. Optional Copilot interpretation is
 
 Bare numbers and generic yes do not choose a review. `/reviews` enables review delivery; the digest/dashboard link provides case selection. `/reset` in this restricted profile never erases shipping routing or confirmations and does not invoke generic Hermes model commands.
 
+After confirmation or cancellation, consumed proposal buttons are removed and replaced by a closed/submitted status. **View details** and **Open dashboard** remain. Accepted reviews also lose their original decision buttons. Cancel keeps the original open review usable. Message edits retry separately (at most five attempts); a deleted or uneditable message never causes a decision resend. Older closed proposals are cleaned gradually. After updating this code, restart `npm run start:f2` and `python scripts/f2_setup.py gateway` to load both the router and plugin changes; keep their saved state.
+
 ## Restart and recovery
 
 Stop a component with Ctrl+C, then repeat its start command. Keep `.local/f2-state.json`, `.local/f2-simulator.json`, and `.local/hermes-shipping/shipping-inbound.sqlite` with their companion SQLite WAL files. They serve different roles: application routing, backend truth, and received Telegram update progress. The notifier refuses a live owner lock and automatically recovers a positively dead PID; an invalid lock needs operator inspection, not blind deletion.
