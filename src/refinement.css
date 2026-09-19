@@ -692,3 +692,8 @@ pre {
     scroll-behavior: auto !important;
   }
 }
+
+@media (min-width: 901px) {
+  .overview-tools { grid-template-columns: minmax(180px, 220px) minmax(0, 1fr) minmax(170px, 240px); }
+}
+.work-hint { display: block; overflow-wrap: anywhere; }

@@ -1,3 +1,9 @@
+import {
+  workHint,
+  compareWork,
+  type CaseSort,
+  type WorkHint,
+} from "../shared/presentation-priority";
 import { ReviewActions } from "./ReviewActions";
 import { CaseProgress } from "./CaseProgress";
 import { useEffect, useState, type ReactNode } from "react";
@@ -675,8 +681,55 @@ function Overview({ refresh, retry }: { refresh: number; retry: () => void }) {
     </>
   );
 }
+function useWorkHints(cases: CaseSummary[] | undefined) {
+  const candidates = (cases ?? []).filter((c) => c.has_open_review);
+  const result = usePoll(
+    `priority:${candidates.map((c) => `${c.case_id}/${c.run_id}/${c.updated_at}`).join("|")}`,
+    (signal) =>
+      Promise.all(candidates.map((c) => api.detail(c.case_id, signal))),
+  );
+  const hints: Record<string, WorkHint> = {};
+  for (const c of cases ?? [])
+    hints[c.case_id] = workHint(
+      c,
+      result.error
+        ? undefined
+        : result.data?.find((d) => d.case_id === c.case_id),
+    );
+  return {
+    hints,
+    note: result.error
+      ? "Review guidance unavailable. Open a case to inspect it; no quick-review assumptions are made."
+      : result.loading && candidates.length
+        ? "Checking review evidence for priority…"
+        : "Suggested work order, not urgency. Quick reviews may still need further review; external work remains external.",
+  };
+}
+function WorkSort({
+  value,
+  onChange,
+}: {
+  value: CaseSort;
+  onChange: (value: CaseSort) => void;
+}) {
+  return (
+    <label>
+      Sort cases
+      <select
+        value={value}
+        onChange={(e) => onChange(e.target.value as CaseSort)}
+      >
+        <option value="investigation">Investigation first</option>
+        <option value="quick">Quick reviews first</option>
+        <option value="recent">Recently updated</option>
+      </select>
+    </label>
+  );
+}
 function OverviewCases({ cases }: { cases: CaseSummary[] }) {
   const [filter, setFilter] = useState("All cases");
+  const [sort, setSort] = useState<CaseSort>("investigation");
+  const { hints, note } = useWorkHints(cases);
   const [search, setSearch] = useState("");
   const [category, setCategory] = useState("");
   const groups: Record<string, (c: CaseSummary) => boolean> = {
@@ -698,13 +751,17 @@ function OverviewCases({ cases }: { cases: CaseSummary[] }) {
         .toLowerCase()
         .includes(search.toLowerCase()),
   );
-  const visible = scoped.filter(groups[filter]);
+  const visible = scoped
+    .filter(groups[filter])
+    .sort((a, b) => compareWork(a, b, hints, sort));
   return (
     <Panel
       title="Case overview"
       subtitle="Select a review state, then open a case to inspect its evidence."
     >
+      <p className="muted">{note}</p>
       <div className="overview-tools">
+        <WorkSort value={sort} onChange={setSort} />
         <label>
           Search overview
           <input
@@ -749,7 +806,9 @@ function OverviewCases({ cases }: { cases: CaseSummary[] }) {
           <span>Next step / updated</span>
         </div>
         {visible.length ? (
-          visible.map((c) => <CaseRow key={c.case_id} c={c} />)
+          visible.map((c) => (
+            <CaseRow key={c.case_id} c={c} hint={hints[c.case_id]} />
+          ))
         ) : (
           <Empty title="No matching cases">
             Choose another category or clear your search.
@@ -835,6 +894,7 @@ function Cases({
   refresh: number;
   retry: () => void;
 }) {
+  const [sort, setSort] = useState<CaseSort>("investigation");
   const params = new URLSearchParams(query);
   const [filters, setFilters] = useState<Filters>(Object.fromEntries(params));
   const [search, setSearch] = useState(""),
@@ -844,11 +904,14 @@ function Cases({
     `cases:${JSON.stringify(filters)}:${refresh}`,
     (signal) => api.list(filters, signal),
   );
-  const visible = data?.filter((c) =>
-    `${c.subject} ${c.case_id} ${c.from}`
-      .toLowerCase()
-      .includes(search.toLowerCase()),
-  );
+  const { hints, note } = useWorkHints(data);
+  const visible = data
+    ?.filter((c) =>
+      `${c.subject} ${c.case_id} ${c.from}`
+        .toLowerCase()
+        .includes(search.toLowerCase()),
+    )
+    .sort((a, b) => compareWork(a, b, hints, sort));
   async function create() {
     setCreateBusy(true);
     setCreateError(undefined);
@@ -892,7 +955,9 @@ function Cases({
             onChange={(e) => setSearch(e.target.value)}
           />
         </label>
+        <p className="muted">{note}</p>
         <div className="filter-grid">
+          <WorkSort value={sort} onChange={setSort} />
           {(
             [
               { key: "workflow_status", label: "Workflow", options: workflows },
@@ -959,7 +1024,7 @@ function Cases({
                   <span>Review / updated</span>
                 </div>
                 {visible.map((c) => (
-                  <CaseRow c={c} key={c.case_id} />
+                  <CaseRow c={c} hint={hints[c.case_id]} key={c.case_id} />
                 ))}
               </>
             ) : (
@@ -976,7 +1041,7 @@ function Cases({
     </>
   );
 }
-function CaseRow({ c }: { c: CaseSummary }) {
+function CaseRow({ c, hint }: { c: CaseSummary; hint?: WorkHint }) {
   return (
     <article className="case-row">
       <div>
@@ -985,6 +1050,7 @@ function CaseRow({ c }: { c: CaseSummary }) {
           <ArrowRight size={15} aria-hidden="true" />
         </Link>
         <small>{c.from}</small>
+        <small className="work-hint">{(hint ?? workHint(c)).label}</small>
         <div className="case-meta">
           <span>{c.category ? human(c.category) : "Classifying"}</span>
           <span>{c.mismatch_count} mismatches</span>

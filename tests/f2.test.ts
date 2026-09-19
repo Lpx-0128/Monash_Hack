@@ -517,7 +517,9 @@ test("F2 send-marker recovery, document failure, persisted dedup, flood and dige
     (await h.api.get("demo_grounded-input")).review?.notified_at,
     null,
   );
-  await h.click("Review: Source available · enter BL gross weight");
+  await h.click(
+    "Quick review · Confirm BL value · Source available · enter BL gross weight",
+  );
   assert.ok(
     h.transport.messages.some((m) =>
       m.text.includes("couldn’t attach the source document"),
@@ -664,18 +666,31 @@ test("F2 notifier correction and operator-only failure, active-run queued rechec
     (m) => m.chat === "101" && m.buttons.length,
   )!;
   assert.ok(
-    business.buttons.flat().every((b) => !b.text.startsWith("Needs help:")),
+    business.buttons
+      .flat()
+      .every(
+        (b) =>
+          !b.text.startsWith(
+            "Needs investigation · Resolve processing failure",
+          ),
+      ),
   );
   const mismatch = business.buttons
     .flat()
-    .find((b) => b.text === "Needs correction: Container quantity differs")!;
+    .find(
+      (b) =>
+        b.text ===
+        "Needs investigation · Check corrections needed · Container quantity differs",
+    )!;
   await h.input({ message: business.id, callback: mismatch.callback_data });
   const operator = h.transport.messages.find(
     (m) => m.chat === "202" && m.buttons.length,
   )!;
   const failure = operator.buttons
     .flat()
-    .find((b) => b.text.startsWith("Needs help:"))!;
+    .find((b) =>
+      b.text.startsWith("Needs investigation · Resolve processing failure"),
+    )!;
   await h.input({
     actor: "202",
     chat: "202",
@@ -700,7 +715,9 @@ test("F2 notifier correction and operator-only failure, active-run queued rechec
   const oldButton = business.buttons
     .flat()
     .find(
-      (b) => b.text === "Review: Source available · enter BL gross weight",
+      (b) =>
+        b.text ===
+        "Quick review · Confirm BL value · Source available · enter BL gross weight",
     )!;
   await h.api.request("/cases/" + old.case_id + "/reprocess", {});
   const n = h.transport.messages.length;
@@ -761,4 +778,32 @@ test("Consumed confirmations disappear, retain navigation, and retry edits witho
     ).length,
     1,
   );
+});
+
+test("Telegram queue puts evidenced quick reviews before investigation without hiding any cases", async (t) => {
+  const h = await setup(t);
+  await h.input({ text: "/reviews" });
+  await h.tick();
+  const queue = h.transport.messages.find(
+    (m) => m.chat === "101" && m.buttons.length,
+  )!;
+  const buttons = queue.buttons.flat();
+  const labels = buttons.map((b) => b.text);
+  assert.ok(labels[0].startsWith("Quick review"));
+  const firstInvestigation = labels.findIndex((l) =>
+    l.startsWith("Needs investigation"),
+  );
+  assert.ok(firstInvestigation > 0);
+  assert.ok(
+    labels
+      .slice(firstInvestigation)
+      .every((l) => !l.startsWith("Quick review")),
+  );
+  const ids = buttons.map(
+    (b) => h.engine.state.buttons[b.callback_data.slice(5)].binding.caseId,
+  );
+  assert.ok(ids.includes("demo_grounded-input"));
+  assert.ok(ids.includes("demo_field-input"));
+  assert.ok(ids.includes("demo_blocked-open"));
+  assert.equal(new Set(ids).size, ids.length);
 });

@@ -1,3 +1,8 @@
+import {
+  workHint,
+  compareWork,
+  type WorkHint,
+} from "../shared/presentation-priority";
 import { randomBytes } from "node:crypto";
 import {
   existsSync,
@@ -738,6 +743,7 @@ export class ReviewEngine {
         if (!this.state.recipients.includes(recipientKey(recipient))) continue;
         const api = this.apiFor(recipient.actor),
           summaries = await api.list();
+        const hints: Record<string, WorkHint> = {};
         for (const s of summaries) {
           const type =
             s.workflow_status === "FAILED"
@@ -753,6 +759,7 @@ export class ReviewEngine {
           if (!type) continue;
           const c = await api.get(s.case_id),
             b = this.binding(c, recipient);
+          hints[s.case_id] = workHint(s, c);
           const key = `${b.run}/${type === "review" ? b.review : type}/${recipientKey(recipient)}`;
           this.state.deliveries[key] ??= {
             ...b,
@@ -822,7 +829,14 @@ export class ReviewEngine {
             !prior ||
             (prior.signature !== signature && this.now() - prior.at >= 60000)
           ) {
-            const choices = requested ? active : backlog;
+            const choices = [...(requested ? active : backlog)].sort((a, b) =>
+              compareWork(
+                summaries.find((s) => s.case_id === a.caseId)!,
+                summaries.find((s) => s.case_id === b.caseId)!,
+                hints,
+                "quick",
+              ),
+            );
             this.state.digests[recipientKey(recipient)] = {
               at: this.now(),
               signature,
@@ -834,11 +848,11 @@ export class ReviewEngine {
             if (choices.length)
               await this.sendButtons(
                 choices[0],
-                `${choices.length} practice cases are queued.\nWhich would you like to open? Pick one below; I won’t send the whole backlog.\n\nSend /pause to stop new notifications.`,
+                `${choices.length} practice cases are queued.\nQuick reviews are listed first; investigation and external follow-up come later. This is guidance, not a guarantee of completion.\nPick one below; I won’t send the whole backlog.\n\nSend /pause to stop new notifications.`,
                 choices.map((d) => [
                   this.button(
                     d,
-                    `${d.type === "review" ? "Review" : d.type === "failure" ? "Needs help" : "Needs correction"}: ${summaries.find((s) => s.case_id === d.caseId)?.subject ?? d.caseId}`.slice(
+                    `${hints[d.caseId]?.label ?? "Needs investigation"} · ${summaries.find((s) => s.case_id === d.caseId)?.subject ?? d.caseId}`.slice(
                       0,
                       80,
                     ),

@@ -16,6 +16,14 @@ npm start
 
 Open **http://localhost:5173**. This is the production build served alongside the API. For development with hot reload use `npm run dev` instead. Stop the other server before switching. `PORT` and `HOST` can be set in the launching environment; `.env.example` documents settings (the server does not automatically load a `.env` file).
 
+## Suggested work order
+
+Telegram queues put **Quick review** actions first: parsed document choices, grounded value candidates, and single-target value entry with available evidence. Cases with multiple visible uncertainties, unsupported choices, missing evidence, external work, known mismatches or processing failures appear later as **Needs investigation**, with the action in the button label. Case subjects remain identifiers; no fixture name or model call determines priority. Existing flood controls and recipient restrictions still apply. Send `/reviews` for a newly ordered list after restarting `npm run start:f2`; old queue messages are not reordered in place.
+
+Overview and All cases default to **Investigation first**. Use **Sort cases** to select Quick reviews first or Recently updated. Labels explain the suggested work; ties use update time then case ID. Processing and finished cases follow actionable work. This is presentation guidance, not urgency or a guarantee of phone completion. Multiple visible uncertainties are investigation work, but later uncertainty can still emerge after any decision. All channels retain their current capabilities and confirmations.
+
+Dashboard evidence guidance uses the existing case-detail API for open reviews. If it is unavailable or belongs to an older run/update, no quick-review assumption is made; a visible guidance warning explains the fallback. No shared-contract fields or backend review ordering changed.
+
 ## Try the F1 review journeys
 
 Open **All cases**; reset through **Demo controls → Reset demo** to restore all 23 synthetic scenarios. Reset creates fresh run IDs so an old confirmation cannot target a new demonstration.

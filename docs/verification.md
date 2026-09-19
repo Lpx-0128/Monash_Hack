@@ -38,6 +38,12 @@ Confirmed/cancelled/replaced proposals now have their action buttons removed, wi
 
 Verification: `npm run check` passed 68 application tests, TypeScript and build; after bounding cleanup batches, all 15 F2 tests passed again. The pinned native Hermes/PTB test passed including text/keyboard edits and unauthorized edit denial with mocked Telegram HTTP. Both browser F2/F3 transport-double → simulator → dashboard journeys passed (2/2), asserting removed confirmation buttons, retained navigation and completed outcome. Initial sandbox executions failed on Windows user-profile/dependency access; the same checks passed with permitted local execution. No live Telegram edit is claimed. Restart both router and dedicated gateway using setup instructions to activate this change; a live visual confirmation remains outstanding.
 
+## Channel-specific presentation priority — 20 September 2026
+
+Shared presentation rules derive suggestions from workflow, current review, document/evidence availability and visible unresolved fields. Telegram selectable queues sort straightforward reviews first with action-based labels; both dashboard lists default to investigation first and provide quick/recent alternatives. Unknown or stale details never imply phone readiness. Existing API contracts, review sequencing, confirmations, flood controls and authorization are unchanged.
+
+`npm run check`: **70/70** tests, TypeScript and build passed. New assertions cover missing evidence, stale runs, misleading subjects, unsupported choices, multiple uncertainties, reverse channel ordering, preservation of queue membership and operator-only failure notices. Existing label assertions were updated for the approved copy; their delivery/auth checks remain. Relevant browser suites: **8/8** (F2/F3 simulator transport journeys and refinement), including both sorts, unchanged filter counts, 375/768/1440 layouts and accessibility checks. Manual local browser inspection confirmed default/switch ordering and phone controls; captured warning/error logs were empty. Telegram queue labels/order were verified through the transport double, not a new live Telegram browser session. Restart the router and request `/reviews` to activate the new queue ordering. Real-backend acceptance remains outstanding.
+
 ## Acceptance requirements retained
 
 These requirements remain enforced by the implementation/tests; the authoritative contract AC-01–AC-19 also includes wider integration gates.

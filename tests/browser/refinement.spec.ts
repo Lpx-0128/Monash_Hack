@@ -130,3 +130,24 @@ for (const width of [375, 768, 1440])
       });
     }
   });
+
+test("Both dashboard lists default to investigation and allow quick-review sorting", async ({
+  page,
+}) => {
+  for (const path of ["/", "/cases"]) {
+    await page.goto(path);
+    await expect(
+      page.getByText("Checking review evidence for priority…"),
+    ).toHaveCount(0);
+    await expect(page.locator(".case-row").first()).toContainText(
+      "Needs investigation",
+    );
+    await page.getByLabel("Sort cases").selectOption("quick");
+    await expect(page.locator(".case-row").first()).toContainText(
+      "Quick review",
+    );
+    await expect(page.locator(".case-row")).toHaveCount(23);
+    await page.getByLabel("Sort cases").selectOption("recent");
+    await expect(page.locator(".case-row")).toHaveCount(23);
+  }
+});
