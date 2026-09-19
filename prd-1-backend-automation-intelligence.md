@@ -1,7 +1,7 @@
 # PRD 1 — Backend Automation & Intelligence Layer
 
-**Version:** 2.1-aligned · 19 September 2026  
-**Authority:** [Shared System Contract v2.1](./shared-system-contract-v2.1.md) governs every interface and shared semantic rule.  
+**Version:** 2.1.1-aligned · 19 September 2026  
+**Authority:** [Shared System Contract v2.1.1](./shared-system-contract-v2.1.1.md) governs every interface and shared semantic rule.  
 **Companion:** [PRD 2 — Interaction / Frontend Layer](./prd-2-interaction-frontend.md)  
 **Owners:** A — Document Intelligence; B — Platform + Validation.
 
@@ -13,7 +13,7 @@ Shipping staff face mixed inbox traffic, inconsistent document labels/layouts, m
 
 The backend must support the product promise “Don’t monitor AI. Let it chase you” by exposing actionable reviews and visible follow-up states. It must preserve what automation originally decided even when humans later resolve operational work.
 
-The prior conversation reports 520 email records and 250 attachments spanning TXT, PDF, DOCX, and XLSX. B0 must inventory the actual authorized participant input rather than hard-code those counts.
+Direct inspection of the participant bundle found 520 email records, 126 with attachments, and 250 attachment files: 192 TXT, 28 PDF, 8 DOCX, and 22 XLSX. All email records lack a receipt timestamp. B0 must reproduce the inventory for the actual input version rather than hard-code those counts.
 
 ## 2. Success criteria and scope
 
@@ -94,6 +94,10 @@ Treat document/email content as data. Embedded instructions cannot change system
 Create an immutable input snapshot and hash the email plus referenced attachments. A run records input_version and config_version. Config identity includes code, parser, model, prompt, alias, normalization, and comparison policy versions.
 
 At intake, category/classified_by may be null and document roles UNKNOWN. Resolve local participant references or approved fixture IDs without allowing arbitrary file traversal. Do not fetch arbitrary URLs from user-supplied documents.
+
+The participant input contains email_id, from, subject, body, and attachment paths; it is not already a Case API response. Retain the body for classification and adapt source fields into the shared Case shape. Emit schema_version="2.1.1" and email.received_at=null when no receipt timestamp is supplied. This is valid input metadata absence: do not block mapping, create a shipping review, or fail export because of it. Never substitute system time, file modification time, or a date from quoted correspondence.
+
+Case.created_at records initial case creation and remains stable across reprocessing. Case.updated_at and run.started_at describe their respective system events. They do not supply an email receipt time. Validate a genuinely supplied timestamp before normalization; distinguish malformed source values from missing values. No additional ingestion timestamp is required.
 
 Classify from email intent and body as well as subject. Deterministic signals handle clear cases; validated AI classification resolves ambiguity. Non-BL categories finalize as OK with fields=[] and no review.
 
@@ -237,6 +241,10 @@ Persist readable history for classification, parsing, AI fallback, verification,
 
 B owns the harness from B0. Use permitted participant data and self-evaluation only. Do not inspect organizer-only Docker contents or private ground truth. Reserve a representative held-out sample before tuning rules/prompts, and report when it is first evaluated.
 
+The official problem statement makes the self-evaluation endpoint optional and says it is not the final assessment. We retain the harness, full-coverage export, and reproducible snapshots as project validation commitments. If no permitted endpoint is available, report that limitation and perform local schema, source-grounded, and held-out checks; do not invent evaluator scores. sample_submission.json supplies output shape and IDs, not labelled answers.
+
+Text-based processing is the official baseline, with richer formats described as advanced work. This PRD deliberately commits to the formats present in the supplied bundle. Frontend simulation can proceed independently, but synthetic-only results cannot establish accuracy on those participant documents.
+
 Golden tests cover match; single/multiple mismatch; each review reason; ambiguous numeric notation; mixed units; duplicate totals; party/address difference; same-as-consignee; blank both sides; non-BL category; manual override; and technical failure.
 
 Validate:
@@ -268,7 +276,7 @@ B0 and F0 run in parallel. The first real human handshake is a gate immediately 
 
 | Phase | A delivers | B delivers | Exit evidence |
 |---|---|---|---|
-| **B0 — Feasibility, contract, cloud, harness (MUST)** | Authorized format inventory; representative parser spike; held-out split; policy questions | Deployed cloud skeleton; persistent run model; shared types/validator; baseline export/evaluation harness; scoped credentials | Cloud health/readiness; one authorized input ingested; contract-valid mocks for C; documented baseline and external verification gates |
+| **B0 — Feasibility, contract, cloud, harness (MUST)** | Authorized format inventory; participant mapper with null receipt time; representative parser spike; held-out split; policy questions | Deployed cloud skeleton; persistent run model; v2.1.1 types/validator; baseline export/evaluation harness; scoped credentials | Cloud health/readiness; one participant record ingested without a guessed timestamp; known/unknown receipt fixtures for C; documented baseline and external verification gates |
 | **B1 — Minimal scored core (MUST)** | Classification; required format paths; seven-field extraction; minimum G1–G3; normalization/comparison; one real AI fallback | Durable jobs; Case APIs; assessment finalization; minimal review/decision transaction; fail-closed adapter | Real cloud Case renders; grounded match/mismatch; one honest review fixture is produced; real AI evidence |
 | **B1 integration gate — First real review handshake (MUST)** | One targeted human-resolvable uncertainty and dependency recomputation | Review retrieval; durable acceptance/resumption; unchanged machine assessment | Real backend → dashboard/Telegram review → human decision → backend resumes → dashboard reflects operational result |
 | **B2 — Coverage and accuracy (MUST)** | Broader format/layout coverage; context checks; aggregation; aliases; targeted mismatch verification; field-policy fixtures | Full-batch validation; held-out report; snapshot validation; runtime/cost measurements | Required ID set processed; complete candidate snapshot or explicit failing-ID report; errors investigated; no fabricated fallback |
@@ -279,11 +287,13 @@ B2 SHOULD refinements begin only after its MUST validation path works. OCR/visio
 
 ## 15. Acceptance and definition of done
 
-All applicable Contract AC-01–AC-16 scenarios must pass. In addition:
+All applicable Contract AC-01–AC-19 scenarios must pass. In addition:
 
 - All seven fields follow the field-policy table; unrelated digits never ground a value.
 - Three required document formats beyond TXT are exercised on representative participant-facing inputs.
 - Blank and absent values are not silently matches.
+- Missing email receipt metadata maps to null without blocking processing or export; malformed supplied timestamps and omitted required API keys are rejected by the appropriate validator.
+- Reprocessing preserves initial Case.created_at and does not replace unknown receipt time with the new run's timestamp.
 - A full EVAL export contains exactly the authorized required IDs, or generation clearly fails with a diagnostic report.
 - Automatic and operational status are distinguishable in the API and immutable snapshot.
 - Crash/race tests prove transactional acceptance and commit-time run guards.
@@ -297,4 +307,7 @@ All applicable Contract AC-01–AC-16 scenarios must pass. In addition:
 A/B give C complete validated fixtures, scoped API credentials, endpoint behavior, runnable demo-safe cases, safe document access, and error scenarios. C provides real UI/bot decision requests and routing tests. Both sides use the same runtime validator.
 
 This revision removes actionability-based scored skipping, completed-workflow-only export, fake technical-failure output, weak human grounding, and “rerun only one step” language. It moves grounding and meaningful AI into B1, brings review integration forward, defines field policies, and makes override/retry/reprocess behavior implementable. The implementation remains small: REST, polling, transactional state, and one durable worker.
+
+The v2.1.1 refinement incorporates the inspected participant input shape, nullable receipt-time mapping, system timestamp semantics, and related validation. It supersedes the temporary recommendation to block participant conversion on missing received_at. Other unresolved organizer interpretations remain open; this amendment does not settle no-attachment intent or numeric/text comparison policy through assumption.
+
 

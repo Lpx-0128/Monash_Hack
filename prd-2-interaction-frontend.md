@@ -1,9 +1,11 @@
 # PRD 2 — Interaction / Frontend Layer
 
-**Version:** 2.1-aligned · 19 September 2026  
-**Authority:** [Shared System Contract v2.1](./shared-system-contract-v2.1.md) defines all data, review, decision, state, API, and access semantics.  
+**Version:** 2.1.1-aligned · 19 September 2026  
+**Authority:** [Shared System Contract v2.1.1](./shared-system-contract-v2.1.1.md) defines all data, review, decision, state, API, and access semantics.  
 **Companion:** [PRD 1 — Backend Automation & Intelligence Layer](./prd-1-backend-automation-intelligence.md)  
 **Owner:** C — Interaction + Submission; B supports APIs/access; A supports evidence.
+
+**Selected Telegram framework:** Nous Research Hermes Agent. This is an interaction-layer implementation choice under Shared Contract v2.1.1; it does not change the shared API or backend ownership. Pin the tested Hermes release/commit during F2 setup.
 
 ## 1. Objective, USP, and UX philosophy
 
@@ -132,6 +134,8 @@ Include:
 
 Unknown/null values render as unknown, never zero or MATCH. A manual override is visibly ungrounded; a human document-confirmed value can show its genuine source evidence. Evidence may include several cells, rows, pages, or paragraphs.
 
+email.received_at may be null in every workflow state under v2.1.1. Display “Received time unavailable,” or omit that optional display row; never render an invalid date or substitute another timestamp. Label Case.created_at as “Case created” and updated_at as “Last updated.” Use those system timestamps for existing activity ordering; do not add receipt-time sorting that guesses a value for unknown dates. If receipt-time sorting is later introduced, define a consistent unknown-last policy explicitly. Date formatting must handle null before invoking a date parser.
+
 During PROCESSING after a decision, label prior fields/outcome as “Last result; updating.” During FAILED, show the failure prominently even if an earlier assessment remains available. completed_at is displayed only for operational completion.
 
 ## 5. Review widgets and decision confirmation
@@ -163,6 +167,42 @@ Changing the proposed value, review, side, or run clears confirmation. Reject ol
 Ordinary document choices can use their explicit button as confirmation; uncertain AI interpretations must always be previewed before submission.
 
 ## 6. Telegram MVP and secure identity
+
+### 6.1 Hermes integration architecture
+
+Use **Hermes Agent as the Telegram gateway and agent runtime**, with a project-specific shipping-review integration. The dashboard remains the custom three-screen application in this PRD; adopting Hermes does not replace it with Hermes's own administration dashboard.
+
+```text
+Telegram user
+  ↔ Hermes Telegram gateway
+  ↔ shipping-review integration: routing, parsing, confirmation, API client
+  ↔ Shared Contract REST API (simulator initially; real backend at integration)
+
+Dashboard ↔ its API adapter ↔ the same Shared Contract REST API
+```
+
+Hermes supplies Telegram connectivity and extension mechanisms. Our integration must implement and verify shipping-specific review routing, durable delivery mappings, confirmation binding, and contract requests. Hermes conversation history or memory must never substitute for authoritative Case/Review records.
+
+Use supported plugin/tool/command extension points where they fit. Keep the backend API client independent of Hermes so the simulator and future real backend expose the same interface. Any custom callback or adapter extension must be documented and tested against the pinned version; do not assume generic plugin support proves every required Telegram callback path is available.
+
+The project integration must:
+
+- Fetch authorized cases/reviews and documents through the shared API.
+- Bind Telegram sender/chat/message identity to persisted review_id and run_id records before processing input.
+- Handle explicit buttons and canonical numeric input deterministically, without requiring model interpretation for the MUST path.
+- Persist exact confirmation proposals; build DecisionRequest only after an authenticated human action matches the active proposal.
+- Submit decisions through the backend's validation and durable-acceptance endpoint; never mutate case storage directly.
+- Support the single notifier's outbound review, correction, and operator messages, including returned message IDs and original-document delivery.
+
+Model-facing tools may propose interpretations or retrieve scoped context. They must not manufacture an actor identity, confirmation, or approval. If a submission tool is exposed, its handler must independently require persisted, matching human-confirmation evidence; model-generated `confirmed=true` is insufficient.
+
+Hermes generic clarification and command-approval dialogs are not shipping-review approval records. In particular, a generic next-message answer or bare “yes” must not bypass the explicit reply/selection and exact override-binding rules in §§5–7. Implement domain-specific controls where those rules cannot be satisfied by built-in prompts.
+
+Run one Hermes inbound update consumer per bot token. Do not launch a second independent getUpdates loop alongside Hermes. The existing application notifier polls the backend for pending work and uses the tested Hermes transport integration for delivery; do not depend on an LLM periodically deciding to look for reviews. Keep restart recovery and delivery deduplication in durable application records.
+
+Use a dedicated application profile with only the tools and commands this workflow needs. Disable unrelated shell, file-editing, browser, scheduling, or delegation capabilities for business users. Keep credentials server-side, and enforce backend DEMO scope independently of Hermes's Telegram allowlist.
+
+### 6.2 Setup and user access
 
 The user starts the bot and must be allowlisted/authenticated before receiving case data or submitting decisions. Persist Telegram chat and actor mappings. Unknown users receive setup guidance without case/document disclosure.
 
@@ -202,6 +242,8 @@ If interpretation is uncertain, ask a focused clarification or show buttons/inpu
 ## 9. Proactive discovery, delivery, and flood control
 
 Use one notifier instance. Poll authorized current-run reviews and cases every 3–5 seconds, with backoff on failures. Telegram inbound updates use long polling with durable update progress.
+
+Hermes owns that inbound Telegram polling lifecycle. Verify how the pinned version persists/replays updates and add application-level processed-update records as required. Hermes session resets must not erase shipping-review mappings, pending confirmations, or delivery state.
 
 Persist notification delivery, message mappings, processed updates, and pending confirmations. Do not keep these only in memory. Review delivery is keyed per run/review/recipient; mismatch and technical-failure delivery per run/type/recipient.
 
@@ -265,6 +307,14 @@ Public and Telegram surfaces use explicitly demo-safe fixtures. A run marked DEM
 
 Begin with the full contract fixture set. Validate mocks with the shared runtime validator, including seven fields for settled BL cases, required NONE_OF_THESE, review targeting, null handling, evidence lists, and provenance.
 
+Read the official problem statement and participant README and inspect representative input layouts as F0 reference material. The inspected participant bundle contains 520 records with no received_at; raw records have email_id, from, subject, body, and attachments. The dashboard still consumes the shared Case API rather than raw inbox records.
+
+Build clearly labelled synthetic fixtures reflecting observed multiline addresses, equivalent field labels, container expressions, weight formatting, and supported document formats. Keep their documents and evidence internally consistent. Include both explicitly fictional known receipt times and received_at=null in processing and settled cases. Participant-derived records must retain null where the source supplies no time. Do not use sample_submission.json placeholders as expected classification results.
+
+F0 uses a stateful, deterministic simulated backend behind the API adapter, with resettable scenarios and observable processing updates. Emit schema_version="2.1.1" throughout and validate against the same shared schema; do not maintain a provisional timestamp schema. Missing source receipt time no longer requires a blocking mapper discrepancy after this amendment is adopted.
+
+F0 covers the shell, viewing, navigation/filtering, valid fixtures, loading/error states, and simulated processing. Full decision submission and confirmation journeys remain F1. Simulator acceptance and real-backend acceptance are separate milestones: neither simulation nor representative fixture design proves participant-data extraction accuracy. Private real-data processing and integration checks remain necessary later; no real dataset needs to be exposed publicly to complete F0.
+
 Required presentation fixtures:
 
 1. Automatic clean match.
@@ -296,6 +346,9 @@ Create a small repeatable test set before optional natural-language work. Cover 
 | Restart after send / after decision acceptance | Recover delivery/routing; no duplicate decision |
 | Unauthorized actor or guessed EVAL document | Denied without disclosure |
 | Uncertain optional AI interpretation | Preview/clarify; never automatic submission |
+| received_at=null in a processing or completed case | Valid payload; unknown receipt time shown honestly; no invalid date or blocked screen |
+| Explicitly fictional known receipt time in a synthetic fixture | Correctly formatted receipt time, separate from case creation/update labels |
+| Reprocess a case with unknown receipt time | Receipt remains unknown; case creation time remains stable; current run time advances |
 
 If natural-language AI is implemented, add paraphrase, correction, negation, multiple-number, wrong-side, and malicious instruction examples. Record interpretation accuracy, clarification rate, and unsafe submissions. Wrong-target or unconfirmed override submission is a release-blocking defect, not an acceptable average.
 
@@ -307,25 +360,30 @@ F0 proceeds alongside B0. F1/F2 basic review handling integrates immediately aft
 
 | Phase | Work | Deliverables and exit criteria |
 |---|---|---|
-| **F0 — Deployed shell and valid mocks (MUST)** | API adapter; three-screen responsive structure; shared validator; safe hosting/proxy setup | Deployed dashboard renders all contract mock states, including null classification; no private token in browser |
+| **F0 — Deployed shell and valid mocks (MUST)** | Participant structure review; API adapter; stateful simulator; synthetic source documents; three-screen responsive structure; v2.1.1 validator; safe hosting/proxy setup | Deployed dashboard renders all contract mock states, including null classification and known/unknown receipt time; resettable scenarios; no guessed timestamps or private token in browser |
 | **F1 — Dashboard review flow (MUST)** | All widgets; raw/evidence/provenance views; machine vs operational status; exact override confirmation; error/refetch behavior | Every review mode works on mocks and then a real backend Case; dashboard alone completes a review |
-| **F2 — Telegram minimum and early handshake (MUST)** | /start and allowlist; polling; buttons; explicitly routed numeric input; source documents; deep links; persistent mappings; override confirmation | Real backend review → real message → accepted decision → backend resumption → dashboard update; durable acceptance visible |
-| **F2 completion — Proactive reliability (MUST)** | Single notifier; delivery records/update cursor; flood limits/digest; mismatch/operator notices; stale-run and restart behavior | Sequential/race/stale/restart tests pass; digest does not mark individual delivery; public EVAL access denied |
-| **F3 — Interpretation improvements (SHOULD)** | Optional natural-language AI; structured proposals; ambiguity handling; test set; useful real pipeline view | Measured interpretation results; no automatic ambiguous/wrong-target actions; MUST paths remain deterministic and usable |
+| **F2 — Hermes setup and early handshake (MUST)** | Pin Hermes version; configure dedicated profile, bot and allowlist; implement shipping-review integration; prove callbacks, explicit reply routing, file delivery, persistent mappings, and bound confirmations | Simulator handshake first; then real backend review → Hermes Telegram message → accepted decision → backend resumption → dashboard update; durable acceptance visible |
+| **F2 completion — Proactive reliability (MUST)** | One Hermes inbound consumer and one backend notifier; delivery/update records; flood limits/digest; mismatch/operator notices; stale-run, session-reset, and process-restart behavior | Sequential/race/stale/restart tests pass; Hermes reset cannot lose domain routing; digest does not mark individual delivery; public EVAL access denied |
+| **F3 — Hermes interpretation improvements (SHOULD)** | Optional natural-language interpretation through Hermes; structured proposals; ambiguity handling; test set; useful real pipeline view | Measured interpretation results; no automatic ambiguous/wrong-target actions; MUST paths remain deterministic and usable |
 | **F4 — Rehearsal and submission (MUST)** | Full real integration, replay, responsive checks, safe fixture labels, video/script, README/slides/link checks | Repeatable live flow and backup recording; validated scoped metrics; all submission links work; no mock-only core demonstration |
 
 Manual-override confirmation belongs in F1 and F2, not deferred to F3. If F3 is skipped, the MVP remains complete through buttons, explicit values, and confirmation.
+
+F0 needs no running Hermes instance, Telegram token, or model credentials. Build the custom dashboard and contract-compatible simulator first, using ui-ux-pro-max for design. Record Hermes as the selected future Telegram integration; do not couple dashboard components to Hermes internals.
+
+At the start of F2, perform a bounded integration spike against the pinned Hermes version: receive authenticated updates, preserve reply/callback metadata, render domain buttons, send documents while capturing message IDs, submit one confirmed simulator decision, and restart without losing routing. Record supported extension points and any adapter work required. A successful simulator handshake does not satisfy the real-backend exit criterion. If an essential capability cannot be implemented through the selected extension path, report the specific blocker instead of silently replacing Hermes or weakening the contract.
 
 After C's MUST implementation works, C helps test failures/integration and coordinates submission packaging. A supplies processing details; B supplies architecture/cloud/evaluation evidence. Do not spend spare time on visual polish while core validation remains incomplete.
 
 ## 15. Acceptance and definition of done
 
-All relevant Shared Contract AC-01–AC-16 pass, with particular emphasis on simultaneous decisions, stale replies, exact override binding, restart recovery, external acknowledgment, and access denial.
+All relevant Shared Contract AC-01–AC-19 pass, with particular emphasis on simultaneous decisions, stale replies, exact override binding, restart recovery, external acknowledgment, and access denial.
 
 The interaction MVP is done when:
 
 - A real cloud case renders across the three dashboard screens.
 - The dashboard independently handles every review mode.
+- Known and unknown receipt timestamps display correctly in processing and settled states; operational timestamps are accurately labelled and never substituted for receipt time.
 - Telegram proactively delivers a real review with usable source access.
 - A routed user response and any necessary bound override confirmation reach the backend safely.
 - 202 acceptance is visibly different from final completion.
@@ -335,6 +393,8 @@ The interaction MVP is done when:
 - Technical failures notify operators and preserve accepted user input.
 - All public/bot accesses remain within approved DEMO data.
 - Delivery and routing survive restart with documented at-least-once notification behavior.
+- Hermes session reset and gateway restart preserve application review bindings; generic clarification answers and model-generated approval flags cannot submit unconfirmed decisions.
+- Exactly one inbound consumer uses the bot token, and required structured actions work without an LLM deciding whether to execute them.
 - Replay runs the real pipeline, and synthetic fixtures are labelled.
 - Documentation, video, prototype, and repository links are verified before submission.
 
@@ -347,4 +407,18 @@ The pitch explains proactive attention, honest external blocks, and deterministi
 ## 17. Changes from the prior PRD
 
 Natural-language AI is consistently SHOULD. Manual confirmation moves into the earliest core phases. Routing is explicit and persisted; bare values are never assigned to the only current review. Digests do not mark individual reviews delivered. Mismatch and technical-failure notices are distinct from decision reviews. The dashboard displays intermediate resolutions and retained decisions honestly, and public data restriction is enforced by the server. The first real handshake moves ahead of broad accuracy tuning, while all three dashboard screens and submission ownership are retained.
+
+**Framework selection update:** Hermes Agent is now the required Telegram gateway/agent runtime. F2 adds the shipping-review integration and a version-specific feasibility check; F3 may use Hermes for natural-language proposals. F0 remains independently implementable with the simulated backend. The shared contract and PRD 1 remain framework-independent.
+
+**v2.1.1 data-alignment update:** Adopt nullable receipt time, preserve system timestamp meanings, and test both timestamp variants. Ground F0 synthetic fixtures in observed participant structures while retaining the simulator boundary. This supersedes the temporary timestamp-blocking workaround and any proposed provisional simulator schema. Hermes selection and the existing F1/F2 integration requirements remain in force.
+
+## 18. Hermes reference documentation
+
+Official documentation consulted for this selection:
+
+- [Telegram integration](https://hermes-agent.nousresearch.com/docs/user-guide/messaging/telegram): Telegram setup and interaction capabilities, including generic clarification prompts. These are framework features, not evidence that our domain-specific review invariants are already implemented.
+- [Build a Hermes Plugin](https://hermes-agent.nousresearch.com/docs/developer-guide/plugins): supported custom tools, commands, and hooks for application integration.
+- [Toolsets reference](https://hermes-agent.nousresearch.com/docs/reference/toolsets-reference): configurable tool availability; restrict the application profile to its intended workflow.
+
+The architecture and additional checks above are project requirements inferred from Shared Contract v2.1.1, not claims of out-of-the-box Hermes guarantees. No Hermes installation or integration test has been performed as part of this PRD update.
 
