@@ -1,7 +1,9 @@
 import { createApp } from "./app";
 import express from "express";
 import path from "node:path";
-const { app } = createApp();
+const { app } = createApp({
+  stateFile: process.env.SIMULATOR_STATE_FILE ?? ".local/simulator-state.json",
+});
 if (process.argv.includes("--dev")) {
   const { createServer } = await import("vite");
   const vite = await createServer({
@@ -18,6 +20,6 @@ if (process.argv.includes("--dev")) {
 const port = Number(process.env.PORT ?? 5173);
 app.listen(port, process.env.HOST ?? "127.0.0.1", () =>
   console.log(
-    `Harbor Review: http://localhost:${port} (synthetic F0 simulator)`,
+    `Harbor Review: http://localhost:${port} (synthetic F1 simulator)`,
   ),
 );

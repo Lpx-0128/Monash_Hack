@@ -19,15 +19,9 @@ import {
   type Scenario,
 } from "./fixtures";
 
-export class ApiError extends Error {
-  constructor(
-    public status: number,
-    public code: string,
-    message: string,
-  ) {
-    super(message);
-  }
-}
+import { ApiError } from "./errors";
+export { ApiError } from "./errors";
+import { prepareDecision, applyDecision, type AcceptedWork } from "./decisions";
 export const summary = (c: Case): CaseSummary => ({
   case_id: c.case_id,
   run_id: c.run.run_id,
@@ -112,7 +106,13 @@ export class DemoStore {
   cases = new Map<string, Case>();
   documents = new Map<string, string>();
   archivedReviews = new Map<string, Review>();
-  jobs = new Map<string, { runId: string; due: number; scenario: Scenario }>();
+  jobs = new Map<
+    string,
+    { runId: string; due: number; scenario: Scenario; decisionId?: string }
+  >();
+  decisions = new Map<string, AcceptedWork>();
+  invalidAttempts: number[] = [];
+  decisionFault: "none" | "lost-response" | "fail-resumption" = "none";
   fault: "none" | "outage" | "slow" | "denied" = "none";
   constructor() {
     this.reset();
@@ -122,10 +122,17 @@ export class DemoStore {
     this.documents.clear();
     this.archivedReviews.clear();
     this.jobs.clear();
+    this.decisions.clear();
+    this.invalidAttempts = [];
+    this.decisionFault = "none";
     this.fault = "none";
     if (!empty)
       for (const [scenario] of scenarios) {
-        const c = makeFixture(scenario, this.documents);
+        const c = makeFixture(
+          scenario,
+          this.documents,
+          `demo_${scenario}_${randomUUID()}`,
+        );
         auditDocuments(c, this.documents);
         this.cases.set(c.case_id, c);
         for (const h of c.history) {
@@ -133,6 +140,82 @@ export class DemoStore {
           if (r?.status === "CLOSED") this.archivedReviews.set(r.review_id, r);
         }
       }
+  }
+  decide(pathId: string, input: unknown, actor: string) {
+    const now = Date.now();
+    this.invalidAttempts = this.invalidAttempts.filter((t) => now - t < 60000);
+    if (this.invalidAttempts.length >= 12)
+      throw new ApiError(
+        429,
+        "RATE_LIMITED",
+        "Too many invalid decisions. Wait one minute before trying again.",
+      );
+    const r = this.review(pathId),
+      current = this.get(r.case_id);
+    let work: AcceptedWork;
+    try {
+      work = prepareDecision(current, r, pathId, input, actor, this.documents);
+    } catch (e) {
+      if (e instanceof ApiError && e.status === 422)
+        this.invalidAttempts.push(now);
+      throw e;
+    }
+    const c = structuredClone(current),
+      at = new Date(now).toISOString();
+    c.review!.status = "CLOSED";
+    c.review!.close_reason = "DECISION_ACCEPTED";
+    c.review!.closed_at = at;
+    c.workflow_status = "PROCESSING";
+    c.updated_at = at;
+    c.completed_at = null;
+    c.follow_up =
+      effectiveStatus(c) === "MISMATCH" ? "CORRECTION_REQUIRED" : "NONE";
+    work.fail ||= this.decisionFault === "fail-resumption";
+    history(
+      c,
+      "DECISION_RECEIVED",
+      "Decision accepted; pending synthetic resumption. This is not completion.",
+      at,
+      {
+        decision: work.decision,
+        review: structuredClone(c.review),
+        value: work.value,
+      },
+    );
+    c.history[c.history.length - 1].actor.id = actor;
+    validateCase(c);
+    // No await between the open-review check and commit; only the first call wins.
+    this.decisions.set(pathId, work);
+    this.cases.set(c.case_id, c);
+    this.archivedReviews.set(pathId, structuredClone(c.review!));
+    this.jobs.set(c.case_id, {
+      runId: c.run.run_id,
+      due: now + 4000,
+      scenario: "match",
+      decisionId: pathId,
+    });
+    return c;
+  }
+  snapshot() {
+    return structuredClone({
+      cases: [...this.cases],
+      documents: [...this.documents],
+      archivedReviews: [...this.archivedReviews],
+      jobs: [...this.jobs],
+      decisions: [...this.decisions],
+      fault: this.fault,
+      decisionFault: this.decisionFault,
+    });
+  }
+  restore(data: ReturnType<DemoStore["snapshot"]>) {
+    this.cases = new Map(data.cases.map(([id, c]) => [id, validateCase(c)]));
+    this.documents = new Map(data.documents);
+    this.archivedReviews = new Map(data.archivedReviews);
+    this.jobs = new Map(data.jobs);
+    this.decisions = new Map(data.decisions);
+    this.fault = data.fault;
+    this.decisionFault = data.decisionFault;
+    for (const c of this.cases.values()) auditDocuments(c, this.documents);
   }
   get(id: string) {
     const c = this.cases.get(id);
@@ -199,6 +282,9 @@ export class DemoStore {
       runId = `demo_${randomUUID()}`,
       now = new Date().toISOString();
     const c = makeFixture("processing", this.documents, runId);
+    for (const work of this.decisions.values())
+      if (work.decision.run_id === old?.run.run_id && work.status === "pending")
+        work.status = "superseded";
     c.case_id = id;
     c.email.email_id = id;
     c.email.subject = scenarios.find((s) => s[0] === scenario)![1];
@@ -286,6 +372,19 @@ export class DemoStore {
       this.jobs.delete(id);
       const old = this.cases.get(id);
       if (!old || old.run.run_id !== job.runId) continue;
+      if (job.decisionId) {
+        const work = this.decisions.get(job.decisionId)!;
+        if (work.status !== "pending") continue;
+        const c = applyDecision(
+          old,
+          work,
+          this.documents,
+          new Date(now).toISOString(),
+        );
+        work.status = work.fail ? "failed" : "applied";
+        this.cases.set(id, c);
+        continue;
+      }
       const c = makeFixture(job.scenario, this.documents, job.runId);
       c.case_id = id;
       c.email.email_id = id;

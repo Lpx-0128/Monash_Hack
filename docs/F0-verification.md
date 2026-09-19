@@ -1,5 +1,7 @@
 # F0 verification record
 
+**Historical F0 checkpoint:** verified before F1; later changes and current limitations are recorded in [F1 verification](F1-verification.md).
+
 Date: 19 September 2026. Branch: `feat/prd-2-interaction-frontend`.
 
 ## Verified locally

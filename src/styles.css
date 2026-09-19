@@ -1684,3 +1684,39 @@ pre {
     scroll-behavior: auto !important;
   }
 }
+
+.review-actions {
+  margin-top: 20px;
+}
+.proposal {
+  padding: 20px;
+  margin: 20px 0;
+  border: 2px solid #12674f;
+  border-radius: 12px;
+  background: #fff;
+}
+.proposal-buttons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-top: 16px;
+}
+.proposal .mono {
+  display: block;
+  overflow-wrap: anywhere;
+}
+.review-input {
+  display: block;
+}
+.review-input input {
+  display: block;
+  width: 100%;
+  max-width: 440px;
+  margin: 8px 0 16px;
+}
+.review-input button {
+  margin: 0 12px 12px 0;
+}
+.review-actions .notice {
+  margin: 16px 0;
+}

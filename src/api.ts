@@ -1,5 +1,11 @@
 import { z } from "zod";
-import type { Case, CaseSummary, ReviewListItem, Stats } from "../shared/types";
+import type {
+  Case,
+  CaseSummary,
+  ReviewListItem,
+  Stats,
+  DecisionRequest,
+} from "../shared/types";
 import {
   caseSchema,
   errorSchema,
@@ -29,12 +35,14 @@ export interface CaseApi {
   reviews(signal?: AbortSignal): Promise<ReviewListItem[]>;
   create(emailId: string): Promise<Case>;
   reprocess(id: string): Promise<Case>;
+  decide(decision: DecisionRequest): Promise<Case>;
   documentUrl(id: string): string;
 }
 export async function request<T>(
   url: string,
   schema: z.ZodType<T>,
   init: RequestInit = {},
+  expectedStatus?: number,
 ): Promise<T> {
   const response = await fetch(url, {
     credentials: "same-origin",
@@ -56,6 +64,12 @@ export async function request<T>(
         : "The API returned an unreadable error.",
     );
   }
+  if (expectedStatus && response.status !== expectedStatus)
+    throw new RequestError(
+      502,
+      "INVALID_PAYLOAD",
+      "Unexpected acceptance response; refetch before deciding again.",
+    );
   const parsed = schema.safeParse(body);
   if (!parsed.success)
     throw new RequestError(
@@ -90,6 +104,13 @@ function httpApi(base: string): CaseApi {
         method: "POST",
         body: "{}",
       }),
+    decide: (decision) =>
+      request(
+        `${base}/reviews/${encodeURIComponent(decision.review_id)}/decision`,
+        caseSchema,
+        { method: "POST", body: JSON.stringify(decision) },
+        202,
+      ),
     documentUrl: (id) => `${base}/documents/${encodeURIComponent(id)}/content`,
   };
 }
@@ -101,7 +122,7 @@ export const api = isSimulation
   ? createSimulatedApi()
   : createLiveApi(import.meta.env.VITE_API_BASE ?? "/api/v1");
 export const demoControl = (
-  action: "reset" | "advance" | "fault",
+  action: "reset" | "advance" | "fault" | "decision-fault",
   body: object = {},
 ) =>
   request(`/api/demo/${action}`, z.object({ ok: z.literal(true) }), {
@@ -115,7 +136,9 @@ export const initialize = () =>
         z.object({
           mode: z.literal("synthetic"),
           contract: z.literal("2.1.1"),
-          milestone: z.literal("F0"),
+          milestone: z.literal("F1"),
+          actor_id: z.literal("demo-guest"),
+          decision_fault: z.enum(["none", "lost-response", "fail-resumption"]),
           fault: z.enum(["none", "outage", "slow", "denied"]),
         }),
       )

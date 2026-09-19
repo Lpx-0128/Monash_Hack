@@ -6,9 +6,9 @@ test.beforeEach(async ({ page }) => {
   await expect(
     page.getByRole("heading", { name: "Keep shipments moving." }),
   ).toBeVisible();
-  await expect(page.getByText("18", { exact: true }).first()).toBeVisible();
+  await expect(page.getByText("23", { exact: true }).first()).toBeVisible();
 });
-test("overview, filters, evidence, sources, F1 boundary and replay polling", async ({
+test("overview, filters, evidence, sources, closed review boundary and replay polling", async ({
   page,
   context,
 }) => {
@@ -18,11 +18,11 @@ test("overview, filters, evidence, sources, F1 boundary and replay polling", asy
     if (m.type() === "error") errors.push(m.text());
   });
   await page.getByRole("link", { name: "Explore cases" }).click();
-  await expect(page.getByRole("heading", { name: "18 cases" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "23 cases" })).toBeVisible();
   await page
     .getByLabel("Workflow", { exact: true })
     .selectOption("AWAITING_HUMAN");
-  await expect(page.getByRole("heading", { name: "5 cases" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "10 cases" })).toBeVisible();
   await page.getByRole("button", { name: "Clear filters" }).click();
   await page.getByLabel("Search cases").fill("manual override");
   await expect(
@@ -64,11 +64,9 @@ test("overview, filters, evidence, sources, F1 boundary and replay polling", asy
   await expect(
     page.getByText("Synthetic processing in progress."),
   ).toBeVisible();
-  await expect(
-    page.getByText(
-      "Preview only · decision submission and exact override confirmation are reserved for F1.",
-    ),
-  ).toBeVisible({ timeout: 15000 });
+  await expect(page.getByRole("button", { name: "Preview value" })).toBeEnabled(
+    { timeout: 15000 },
+  );
   await expect(page.locator(".assessment").first()).toContainText(
     "Needs review",
   );
@@ -82,6 +80,11 @@ test("every fixture is reachable with correct review modes, failures and history
   page,
 }) => {
   const states = [
+    "grounded-input",
+    "both-sides",
+    "mismatch-review",
+    "unsupported-candidate",
+    "resume-failure",
     "processing",
     "match",
     "mismatch",
@@ -112,10 +115,10 @@ test("every fixture is reachable with correct review modes, failures and history
     if (id === "candidate-choice" || id === "document-choice")
       await expect(
         page.getByRole("button", { name: "None of these" }),
-      ).toBeDisabled();
+      ).toBeEnabled();
     if (id === "blocked-acknowledged") {
       await expect(
-        page.getByText("Acknowledgment recorded in fixture", { exact: true }),
+        page.getByText("Acknowledgment recorded", { exact: true }),
       ).toBeVisible();
       await expect(page.locator(".run-strip")).toContainText("External block");
     }
@@ -148,10 +151,10 @@ test("empty/reset, explicit advance, slow loading, errors and recovery", async (
   await page.getByRole("button", { name: "Advance processing" }).click();
   await expect(page.locator(".run-strip")).toContainText("Completed");
   await page.getByRole("button", { name: "Reset demo" }).click();
-  await expect(page.getByText("18", { exact: true }).first()).toBeVisible();
+  await expect(page.getByText("23", { exact: true }).first()).toBeVisible();
   await page.getByLabel("Connection", { exact: true }).selectOption("slow");
   await expect(page.getByText("Loading current API data…")).toBeVisible();
-  await expect(page.getByText("18", { exact: true }).first()).toBeVisible();
+  await expect(page.getByText("23", { exact: true }).first()).toBeVisible();
   await page.getByLabel("Connection", { exact: true }).selectOption("outage");
   await expect(page.getByRole("alert")).toContainText(
     "Simulated service outage",
@@ -166,7 +169,7 @@ test("empty/reset, explicit advance, slow loading, errors and recovery", async (
     "denied",
   );
   await page.getByLabel("Connection", { exact: true }).selectOption("none");
-  await expect(page.getByText("18", { exact: true }).first()).toBeVisible();
+  await expect(page.getByText("23", { exact: true }).first()).toBeVisible();
   await page.goto("/cases/unavailable");
   await expect(page.getByRole("alert")).toContainText("Case unavailable");
 });
@@ -212,7 +215,7 @@ test("poll failure retains stale data; recovery does not regress current run", a
   await expect(page.getByRole("alert")).toContainText("showing stale data", {
     timeout: 8000,
   });
-  await expect(page.getByText("18", { exact: true }).first()).toBeVisible();
+  await expect(page.getByText("23", { exact: true }).first()).toBeVisible();
   await page.unroute("**/api/v1/stats");
   await page.getByRole("button", { name: "Retry", exact: true }).click();
   await expect(page.getByRole("alert")).toHaveCount(0);

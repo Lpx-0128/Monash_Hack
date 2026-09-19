@@ -4,6 +4,7 @@ export function usePoll<T>(
   key: string,
   fetcher: (signal: AbortSignal) => Promise<T>,
 ) {
+  const epoch = useRef(0);
   const fetchRef = useRef(fetcher);
   fetchRef.current = fetcher;
   const [state, setState] = useState<{
@@ -19,13 +20,15 @@ export function usePoll<T>(
     const controller = new AbortController();
     setState({ loading: true });
     const run = async () => {
+      const started = epoch.current;
       try {
         const data = await fetchRef.current(
           AbortSignal.any([controller.signal, AbortSignal.timeout(12000)]),
         );
         if (!active) return;
         failures = 0;
-        setState({ data, loading: false, updated: new Date() });
+        if (started === epoch.current)
+          setState({ data, loading: false, updated: new Date() });
       } catch (e) {
         if (!active) return;
         failures++;
@@ -50,5 +53,11 @@ export function usePoll<T>(
       clearTimeout(timer);
     };
   }, [key]);
-  return state;
+  return {
+    ...state,
+    replace: (data: T) => {
+      epoch.current++;
+      setState({ data, loading: false, updated: new Date() });
+    },
+  };
 }

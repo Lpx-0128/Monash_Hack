@@ -10,7 +10,7 @@ import {
   summarySchema,
 } from "../shared/validation";
 
-test("HTTP boundary: scope, filters, sessions, documents, replay, reset and F1 unavailability", async () => {
+test("HTTP boundary: scope, filters, sessions, documents, replay, reset and scope restrictions", async () => {
   const { app, dispose } = createApp();
   const server = app.listen(0, "127.0.0.1");
   await new Promise<void>((r) => server.once("listening", r));
@@ -35,14 +35,14 @@ test("HTTP boundary: scope, filters, sessions, documents, replay, reset and F1 u
       "2.1.1",
     );
     const list = await (await get("/api/v1/cases")).json();
-    assert.equal(list.length, 18);
+    assert.equal(list.length, 23);
     list.forEach((c: unknown) => summarySchema.parse(c));
     const filtered = await (
       await get(
         "/api/v1/cases?has_open_review=true&workflow_status=AWAITING_HUMAN",
       )
     ).json();
-    assert.equal(filtered.length, 5);
+    assert.equal(filtered.length, 10);
     assert.ok(
       filtered.every((c: { has_open_review: boolean }) => c.has_open_review),
     );
@@ -114,14 +114,18 @@ test("HTTP boundary: scope, filters, sessions, documents, replay, reset and F1 u
       (
         await get(`/api/v1/reviews/${review.review_id}/decision`, "POST", {
           run_id: review.run_id,
+          review_id: review.review_id,
+          channel: "DASHBOARD",
+          actor_id: "demo-guest",
+          action: "ACKNOWLEDGE",
         })
       ).status,
       409,
     );
     const other = await fetch(base + "/api/v1/cases/demo_field-input");
     assert.equal(
-      caseSchema.parse(await other.json()).run.run_id,
-      review.run_id,
+      caseSchema.parse(await other.json()).workflow_status,
+      "AWAITING_HUMAN",
       "Other session is isolated",
     );
     await get("/api/demo/advance", "POST", {});

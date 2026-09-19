@@ -13,7 +13,10 @@ initialize()
   .then((config) =>
     root.render(
       <React.StrictMode>
-        <App initialFault={config?.fault ?? "none"} />
+        <App
+          initialFault={config?.fault ?? "none"}
+          initialDecisionFault={config?.decision_fault ?? "none"}
+        />
       </React.StrictMode>,
     ),
   )

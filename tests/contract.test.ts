@@ -198,12 +198,12 @@ test("Direct human override confirmation cannot migrate to a different value, fi
 test("Stats count current run, unassessed and historical reviews correctly", () => {
   const s = new DemoStore(),
     stats = statistics([...s.cases.values()]);
-  assert.equal(stats.total_cases, 18);
+  assert.equal(stats.total_cases, 23);
   assert.equal(stats.unclassified, 3);
   assert.equal(stats.by_machine_status.OK, 2);
   assert.equal(stats.by_machine_status.MISMATCH, 1);
-  assert.equal(stats.by_machine_status.NEEDS_REVIEW, 12);
-  assert.equal(stats.awaiting_human_now, 7);
+  assert.equal(stats.by_machine_status.NEEDS_REVIEW, 17);
+  assert.equal(stats.awaiting_human_now, 12);
   assert.equal(stats.auto_completed, 3);
   assert.equal(stats.ai_assisted_cases, 0);
   assert.equal(stats.by_workflow.FAILED, 2);

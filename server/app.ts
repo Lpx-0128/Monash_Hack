@@ -1,13 +1,43 @@
 import express from "express";
+import {
+  existsSync,
+  readFileSync,
+  writeFileSync,
+  renameSync,
+  mkdirSync,
+} from "node:fs";
+import { dirname } from "node:path";
 import { randomUUID } from "node:crypto";
 import { z } from "zod";
 import { ApiError, DemoStore, statistics, summary } from "./store";
 import { categories, statuses, workflows } from "../shared/validation";
 
 /** Each browser receives a server-issued, DEMO-only guest session. No actor from JSON is trusted. */
-export function createApp() {
+export function createApp(options: { stateFile?: string } = {}) {
   const app = express();
   const sessions = new Map<string, { store: DemoStore; touched: number }>();
+  if (options.stateFile && existsSync(options.stateFile)) {
+    const saved = JSON.parse(readFileSync(options.stateFile, "utf8"));
+    for (const [token, data] of saved) {
+      const store = new DemoStore();
+      store.restore(data.store);
+      sessions.set(token, { store, touched: data.touched });
+    }
+  }
+  const persist = () => {
+    if (!options.stateFile) return;
+    mkdirSync(dirname(options.stateFile), { recursive: true });
+    writeFileSync(
+      options.stateFile + ".tmp",
+      JSON.stringify(
+        [...sessions].map(([token, s]) => [
+          token,
+          { touched: s.touched, store: s.store.snapshot() },
+        ]),
+      ),
+    );
+    renameSync(options.stateFile + ".tmp", options.stateFile);
+  };
   app.disable("x-powered-by");
   app.use(express.json({ limit: "16kb" }));
   app.use((_req, res, next) => {
@@ -20,14 +50,12 @@ export function createApp() {
     if (req.method !== "GET" && req.headers.origin) {
       const origin = new URL(req.headers.origin);
       if (origin.host !== req.headers.host)
-        return res
-          .status(403)
-          .json({
-            error: {
-              code: "FORBIDDEN",
-              message: "Cross-origin writes are not allowed.",
-            },
-          });
+        return res.status(403).json({
+          error: {
+            code: "FORBIDDEN",
+            message: "Cross-origin writes are not allowed.",
+          },
+        });
     }
     const cookies = Object.fromEntries(
       (req.headers.cookie ?? "").split(";").map((v) => v.trim().split("=")),
@@ -49,6 +77,7 @@ export function createApp() {
     }
     session.touched = Date.now();
     res.locals.store = session.store;
+    res.locals.actor = "demo-guest";
     res.setHeader("Cache-Control", "no-store");
     next();
   });
@@ -57,7 +86,9 @@ export function createApp() {
     res.json({
       mode: "synthetic",
       contract: "2.1.1",
-      milestone: "F0",
+      milestone: "F1",
+      actor_id: "demo-guest",
+      decision_fault: store(res).decisionFault,
       fault: store(res).fault,
     }),
   );
@@ -68,10 +99,12 @@ export function createApp() {
         .strict()
         .parse(req.body ?? {}).empty,
     );
+    persist();
     res.json({ ok: true });
   });
   app.post("/api/demo/advance", (_req, res) => {
     store(res).advance();
+    persist();
     res.json({ ok: true });
   });
   app.post("/api/demo/fault", (req, res) => {
@@ -79,6 +112,16 @@ export function createApp() {
       .object({ mode: z.enum(["none", "outage", "slow", "denied"]) })
       .strict()
       .parse(req.body).mode;
+    persist();
+    res.json({ ok: true });
+  });
+  app.post("/api/demo/decision-fault", (req, res) => {
+    store(res).decisionFault = z
+      .strictObject({
+        mode: z.enum(["none", "lost-response", "fail-resumption"]),
+      })
+      .parse(req.body).mode;
+    persist();
     res.json({ ok: true });
   });
   app.use("/api/v1", async (req, res, next) => {
@@ -129,13 +172,16 @@ export function createApp() {
   app.post("/api/v1/cases", (req, res) => {
     const body = z.object({ email_id: z.string() }).strict().parse(req.body);
     const result = store(res).create(body.email_id);
+    persist();
     res.status(result.status).json(result.body);
   });
   app.post("/api/v1/cases/:id/reprocess", (req, res) => {
     z.object({})
       .strict()
       .parse(req.body ?? {});
-    res.status(202).json(store(res).reprocess(req.params.id));
+    const c = store(res).reprocess(req.params.id);
+    persist();
+    res.status(202).json(c);
   });
   app.get("/api/v1/stats", (_req, res) =>
     res.json(statistics([...store(res).cases.values()])),
@@ -171,30 +217,27 @@ export function createApp() {
     res.send(d.text);
   });
   app.post("/api/v1/reviews/:id/decision", (req, res) => {
-    const r = store(res).review(req.params.id);
-    if (r.status === "CLOSED")
-      throw new ApiError(
-        409,
-        "REVIEW_ALREADY_CLOSED",
-        "This review has been handled or superseded.",
-      );
-    if (req.body?.run_id !== r.run_id)
-      throw new ApiError(
-        409,
-        "STALE_RUN",
-        "The request belongs to a different run.",
-      );
-    throw new ApiError(
-      422,
-      "ACTION_NOT_ALLOWED",
-      "Decision submission is unavailable in F0. This read-only review preview is reserved for F1.",
-    );
+    const before = store(res).snapshot();
+    const c = store(res).decide(req.params.id, req.body, res.locals.actor);
+    try {
+      persist();
+    } catch (e) {
+      store(res).restore(before);
+      throw e;
+    }
+    if (store(res).decisionFault === "lost-response") {
+      store(res).decisionFault = "none";
+      persist();
+      res.destroy();
+      return;
+    }
+    res.status(202).json(c);
   });
   app.post("/api/v1/reviews/:id/notified", () => {
     throw new ApiError(
       403,
       "FORBIDDEN",
-      "Notification updates require an interaction-service identity; unavailable in F0.",
+      "Notification updates require an interaction-service identity; outside the F1 dashboard scope.",
     );
   });
   app.use("/api", () => {
@@ -227,7 +270,18 @@ export function createApp() {
   const timer = setInterval(() => {
     for (const [token, s] of sessions) {
       if (Date.now() - s.touched > 7200000) sessions.delete(token);
-      else s.store.tick();
+      else if (
+        [...s.store.jobs.values()].some((job) => job.due <= Date.now())
+      ) {
+        const before = s.store.snapshot();
+        try {
+          s.store.tick();
+          persist();
+        } catch (e) {
+          s.store.restore(before);
+          console.error("Simulator worker failed", e);
+        }
+      }
     }
   }, 250);
   timer.unref();

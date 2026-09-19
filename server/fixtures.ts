@@ -29,6 +29,11 @@ export const labels: Record<CanonicalField, string> = {
   gross_weight_kg: "Gross weight (kg)",
 };
 export const scenarios = [
+  ["grounded-input", "Source available · enter BL gross weight"],
+  ["both-sides", "Two sides · SI before BL"],
+  ["mismatch-review", "Known container mismatch · weight review"],
+  ["unsupported-candidate", "Unsupported candidate · explicit override"],
+  ["resume-failure", "Decision journey · simulated resumption failure"],
   ["processing", "New booking · awaiting classification"],
   ["match", "Port Klang → Singapore · verified"],
   ["mismatch", "Container quantity differs"],
@@ -228,7 +233,7 @@ export function makeFixture(
     "field-input",
     "human-resolved",
     "failed-after",
-    "accepted-processing",
+    "accepted-processing", "mismatch-review", "resume-failure",
   ].includes(scenario);
   const sequential = scenario.startsWith("sequential-");
   const sources = new Map<Side, Record<CanonicalField, FieldValue>>();
@@ -241,7 +246,7 @@ export function makeFixture(
       let v = syntheticValues[field];
       if (
         side === "BL" &&
-        scenario === "mismatch" &&
+        ["mismatch", "mismatch-review"].includes(scenario) &&
         field === "container_count"
       )
         v = 4;
@@ -278,7 +283,7 @@ export function makeFixture(
         override_confirmations: [],
       };
     }
-    if (side === "BL" && scenario === "candidate-choice")
+    if (side === "BL" && ["candidate-choice", "unsupported-candidate"].includes(scenario))
       text += alternateWeightQuote + "\n";
     text +=
       "\nCommodity: SYNTHETIC PAPERBOARD\nBooking Ref: DEMO-042\nVessel: FICTIONAL VOYAGER\nFreight: PREPAID\n";
@@ -343,7 +348,7 @@ export function makeFixture(
       ? "missing_attachment"
       : scenario === "document-choice"
         ? "wrong_doc_type"
-        : ["candidate-choice", "document-confirmed"].includes(scenario)
+        : ["candidate-choice", "unsupported-candidate", "document-confirmed", "grounded-input", "both-sides"].includes(scenario)
           ? "unreadable"
           : "missing_value";
     c.machine_assessment = {
@@ -366,12 +371,16 @@ export function makeFixture(
         f.result = "NOT_COMPARABLE";
         f.not_comparable_cause = "DOCUMENT_LEVEL";
       });
-    if (["candidate-choice", "document-confirmed"].includes(scenario)) {
+    if (["candidate-choice", "unsupported-candidate", "document-confirmed", "grounded-input", "both-sides"].includes(scenario)) {
       const f = c.fields[6];
       f.result = "NOT_COMPARABLE";
       f.not_comparable_cause = "AMBIGUOUS";
       f.bl!.grounded = false;
       f.bl!.flags = ["Interpretation requires human review"];
+    }
+    if (scenario === "both-sides") {
+      c.fields[6].si!.grounded = false;
+      c.fields[6].si!.flags = ["Synthetic SI interpretation uncertainty"];
     }
     if (sequential) {
       c.fields[5].result = "NOT_COMPARABLE";
@@ -387,7 +396,7 @@ export function makeFixture(
       scope: absentBL || scenario === "document-choice" ? "DOCUMENT" : "FIELD",
       ui_mode: absentBL
         ? "ACKNOWLEDGE"
-        : ["candidate-choice", "document-choice"].includes(scenario)
+        : ["candidate-choice", "unsupported-candidate", "document-choice"].includes(scenario)
           ? "CHOICE"
           : "VALUE_INPUT",
       reason,
@@ -397,7 +406,7 @@ export function makeFixture(
           : sequential
             ? "container_count"
             : "gross_weight_kg",
-      side: absentBL || scenario === "document-choice" ? null : "BL",
+      side: absentBL || scenario === "document-choice" ? null : scenario === "both-sides" ? "SI" : "BL",
       target_role: scenario === "document-choice" ? "BL" : null,
       question: intentUnresolved
         ? "Clarify the intended workflow and obtain the required SI and draft BL."
@@ -407,10 +416,10 @@ export function makeFixture(
             ? "Which document is the draft BL?"
             : sequential
               ? "Confirm the BL container count."
-              : "Confirm the BL gross weight in kg.",
+              : `Confirm the ${scenario === "both-sides" ? "SI" : "BL"} gross weight in kg.`,
       context_summary: intentUnresolved
         ? "No-attachment intent is unresolved. The email asks for a future draft; the contract baseline remains BL_COMPARISON / NEEDS_REVIEW with missing_attachment. Do not infer GENERAL from the submission template, introduce NOT_READY as a category, or silently skip comparison. Confirm the intended workflow through coordinated participant-facing clarification."
-        : "Synthetic review context. Inspect the original source before any future decision.",
+        : scenario === "mismatch-review" ? "Container count already differs (SI 3, BL 4). Resolve weight uncertainty; correction is still required if this mismatch remains." : "Synthetic grounding only. Inspect the source before deciding. This does not demonstrate real extraction.",
       options: null,
       allowed_actions: absentBL
         ? ["ACKNOWLEDGE"]
@@ -475,6 +484,13 @@ export function makeFixture(
             },
           },
         ];
+      }
+      if (scenario === "unsupported-candidate") {
+        const option = c.review.options![1];
+        if (option.kind === "VALUE") {
+          option.label = "23000 kg · unsupported proposal";
+          option.value = { ...option.value, raw:"23000", normalized:23000, grounded:false, evidence:[], flags:["Not supported by synthetic source"] };
+        }
       }
       c.review.options!.push({
         option_id: "NONE_OF_THESE",

@@ -1,3 +1,4 @@
+import { ReviewActions } from "./ReviewActions";
 import { useEffect, useState, type ReactNode } from "react";
 import {
   Anchor,
@@ -198,17 +199,24 @@ function Empty({
   );
 }
 
-export function App({ initialFault = "none" }: { initialFault?: string }) {
+export function App({
+  initialFault = "none",
+  initialDecisionFault = "none",
+}: {
+  initialFault?: string;
+  initialDecisionFault?: string;
+}) {
   const path = useRoute(),
     [refresh, setRefresh] = useState(0),
     [controls, setControls] = useState(false),
     [busy, setBusy] = useState(false),
     [controlMessage, setControlMessage] = useState(""),
-    [fault, setFault] = useState(initialFault);
+    [fault, setFault] = useState(initialFault),
+    [decisionFault, setDecisionFault] = useState(initialDecisionFault);
   const retry = () => setRefresh((v) => v + 1),
     isCases = path.startsWith("/cases");
   async function control(
-    action: "reset" | "advance" | "fault",
+    action: "reset" | "advance" | "fault" | "decision-fault",
     body: object = {},
     message = "Demo updated.",
   ) {
@@ -220,6 +228,7 @@ export function App({ initialFault = "none" }: { initialFault?: string }) {
       retry();
       if (action === "reset") {
         setFault("none");
+        setDecisionFault("none");
         go("/");
       }
     } catch (e) {
@@ -329,7 +338,7 @@ export function App({ initialFault = "none" }: { initialFault?: string }) {
                   void control(
                     "reset",
                     {},
-                    "Demo reset to 18 known synthetic cases.",
+                    "Demo reset to 23 known synthetic cases.",
                   )
                 }
               >
@@ -369,6 +378,29 @@ export function App({ initialFault = "none" }: { initialFault?: string }) {
                   <option value="denied">Access denied</option>
                 </select>
               </label>
+              <label>
+                Next decision simulation
+                <select
+                  aria-label="Next decision simulation"
+                  value={decisionFault}
+                  onChange={(e) => {
+                    setDecisionFault(e.target.value);
+                    void control(
+                      "decision-fault",
+                      { mode: e.target.value },
+                      "Decision simulation updated.",
+                    );
+                  }}
+                >
+                  <option value="none">Normal delayed resumption</option>
+                  <option value="lost-response">
+                    Accept, then lose response once
+                  </option>
+                  <option value="fail-resumption">
+                    Accept, then fail resumption
+                  </option>
+                </select>
+              </label>
             </div>
             <p role="status">
               {busy ? "Updating demonstration…" : controlMessage}
@@ -401,7 +433,7 @@ export function App({ initialFault = "none" }: { initialFault?: string }) {
         <footer>
           Harbor Review{" "}
           <span>
-            F0 ·{" "}
+            F1 ·{" "}
             {isSimulation
               ? "Predefined simulation. No AI extraction or notifications run."
               : "Live API adapter. Review actions available in F1."}
@@ -451,7 +483,7 @@ function Overview({ refresh, retry }: { refresh: number; retry: () => void }) {
               : "Current authorized scope."}
           </strong>{" "}
           {isSimulation
-            ? "Every case and document is synthetic. Review actions are preview-only in F0."
+            ? "Every case and document is synthetic. Review actions use simulated grounding and processing."
             : "Showing data from the configured API."}
         </div>
       </div>
@@ -858,6 +890,7 @@ function Detail({
     data: c,
     error,
     loading,
+    replace,
   } = usePoll(`detail:${id}:${refresh}:${localRefresh}`, (signal) =>
     api.detail(id, signal),
   );
@@ -955,7 +988,7 @@ function Detail({
                     ? "Last result; updating. The accepted action has not finished processing."
                     : "Classification and assessment are not available yet."}{" "}
                   {isSimulation
-                    ? "Seeded examples advance via Demo controls; replays update automatically."
+                    ? "Seeded examples advance via Demo controls; decisions and replays update automatically."
                     : ""}
                 </p>
               </div>
@@ -994,7 +1027,9 @@ function Detail({
               <small>Always read alongside the workflow status above.</small>
             </section>
           </div>
-          {c.review && <ReviewPanel review={c.review} />}{" "}
+          {c.review && (
+            <ReviewPanel c={c} onCase={replace} onBusy={setPending} />
+          )}{" "}
           {c.follow_up === "CORRECTION_REQUIRED" && (
             <div className="notice warning">
               <TriangleAlert size={21} aria-hidden="true" />
@@ -1235,7 +1270,16 @@ function Value({ value: v, side }: { value: FieldValue | null; side: string }) {
     </div>
   );
 }
-function ReviewPanel({ review: r }: { review: Review }) {
+function ReviewPanel({
+  c,
+  onCase,
+  onBusy,
+}: {
+  c: Case;
+  onCase: (c: Case) => void;
+  onBusy: (busy: boolean) => void;
+}) {
+  const r = c.review!;
   return (
     <section
       className={`review-panel ${r.status === "CLOSED" ? "closed" : ""}`}
@@ -1259,63 +1303,13 @@ function ReviewPanel({ review: r }: { review: Review }) {
             : "External source needed"}{" "}
         <span className="mono">· {r.review_id}</span>
       </p>
-      {r.ui_mode === "CHOICE" && (
-        <div className="review-options">
-          {r.options?.map((o) => (
-            <div key={o.option_id}>
-              <button disabled>
-                {o.kind === "ESCAPE" ? (
-                  <X size={16} aria-hidden="true" />
-                ) : (
-                  <Check size={16} aria-hidden="true" />
-                )}
-                {o.label}
-              </button>
-              {o.kind === "VALUE" && (
-                <Value value={o.value} side={r.side ?? ""} />
-              )}{" "}
-              {o.kind === "DOCUMENT" && (
-                <a
-                  href={api.documentUrl(o.document_id)}
-                  target="_blank"
-                  rel="noreferrer"
-                >
-                  Inspect candidate document ↗
-                </a>
-              )}
-            </div>
-          ))}
-        </div>
-      )}
-      {r.ui_mode === "VALUE_INPUT" && (
-        <div className="review-input">
-          <label>
-            {r.side} {fieldTitles[r.field!]}
-            <input disabled placeholder="Value entry becomes available in F1" />
-          </label>
-          <button disabled>Preview value</button>
-          <button disabled>I can’t tell</button>
-        </div>
-      )}
-      {r.ui_mode === "ACKNOWLEDGE" && (
-        <div>
-          <p>
-            <strong>Acknowledgment does not complete verification.</strong>{" "}
-            Obtain a corrected source through the operator workflow and start a
-            new run.
-          </p>
-          <button disabled>
-            {r.status === "CLOSED"
-              ? "Acknowledgment recorded in fixture"
-              : "Acknowledge · available in F1"}
-          </button>
-        </div>
-      )}
-      <div className="review-note">
-        {r.status === "CLOSED"
-          ? `Closed: ${human(r.close_reason!)}. This review cannot accept another response.`
-          : "Preview only · decision submission and exact override confirmation are reserved for F1."}
-      </div>
+      <ReviewActions
+        key={`${r.run_id}:${r.review_id}`}
+        c={c}
+        onCase={onCase}
+        onBusy={onBusy}
+        renderValue={(v, side) => <Value value={v} side={side} />}
+      />
       {r.source_documents.length > 0 && (
         <div className="review-sources">
           Review sources:{" "}
