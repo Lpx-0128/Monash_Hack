@@ -5,14 +5,37 @@ import io
 import json
 import os
 import sqlite3
+import inspect
+import logging
 from pathlib import Path
 
 PIN = "44945d224c2ccd6e0a55f16223c7ab0dd39331bf"
+
+def preserve_pending_updates(adapter):
+    """Pinned, instance-local policy for the dedicated long-polling gateway.
+
+    All polling generations (including conflict recovery) share this entry point.
+    Never discard queued user decisions to take over a competing poller.
+    """
+    if os.environ.get('TELEGRAM_WEBHOOK_URL'):
+        raise RuntimeError('Shipping pending-update policy requires long polling')
+    if getattr(adapter, '_shipping_preserves_pending', False):
+        return
+    original = getattr(adapter, '_start_polling_once', None)
+    if not callable(original) or 'drop_pending_updates' not in inspect.signature(original).parameters:
+        raise RuntimeError('Pinned Hermes polling interface changed; compatibility verification required')
+    async def preserving_start(app, *, drop_pending_updates, **kwargs):
+        if drop_pending_updates:
+            logging.getLogger(__name__).info('Shipping gateway preserves pending Telegram updates')
+        return await original(app, drop_pending_updates=False, **kwargs)
+    adapter._start_polling_once = preserving_start
+    adapter._shipping_preserves_pending = True
 
 def register(ctx):
     ctx.register_platform_handler("telegram", wire)
 
 def wire(application, adapter):
+    preserve_pending_updates(adapter)
     from telegram import InlineKeyboardButton, InlineKeyboardMarkup
     from telegram.ext import CallbackQueryHandler, MessageHandler, TypeHandler, ApplicationHandlerStop, filters
     from telegram import Update

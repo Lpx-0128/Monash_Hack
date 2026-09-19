@@ -5,7 +5,9 @@ import os
 from pathlib import Path
 import sqlite3
 import tempfile
+import sys
 from contextlib import closing
+from types import SimpleNamespace
 from aiohttp import web, ClientSession
 from telegram import Update
 from telegram.ext import Application, TypeHandler
@@ -46,7 +48,30 @@ async def main():
         async def forbidden_fallback(u,c):fallback.append(u.update_id)
         request=TelegramDouble();app=Application.builder().token('999:synthetic-test-token').request(request).build()
         await app.initialize()
-        factory,_=factories[0];factory(app,None)
+        polling_calls=[]
+        async def start_polling_once(app, *, drop_pending_updates, **kwargs):
+            polling_calls.append((app,drop_pending_updates,kwargs))
+            return 'generation-preserved'
+        adapter=SimpleNamespace(_start_polling_once=start_polling_once)
+        factory,_=factories[0];factory(app,adapter)
+        policy=sys.modules[factory.__module__].preserve_pending_updates
+        wrapped=adapter._start_polling_once
+        policy(adapter)
+        assert adapter._start_polling_once is wrapped, 'Do not stack wrappers on application rebuild'
+        try: policy(SimpleNamespace())
+        except RuntimeError: pass
+        else: raise AssertionError('Unknown polling interface must fail compatibility checks')
+        os.environ['TELEGRAM_WEBHOOK_URL']='https://synthetic.example/webhook'
+        try:
+            try: policy(SimpleNamespace(_start_polling_once=start_polling_once))
+            except RuntimeError: pass
+            else: raise AssertionError('Unverified webhook mode must not silently bypass policy')
+        finally: os.environ.pop('TELEGRAM_WEBHOOK_URL')
+        for requested in [True,False,True]:  # cold boot, reconnect, conflict recovery
+            result=await adapter._start_polling_once(app,drop_pending_updates=requested,error_callback=None,schedule_verifier=False)
+            assert result=='generation-preserved'
+        assert all(not call[1] for call in polling_calls)
+        assert all(call[2]=={'error_callback':None,'schedule_verifier':False} for call in polling_calls)
         app.add_handler(TypeHandler(Update,forbidden_fallback))
         await app.start()
         def event(i,actor=101,text='21707',reply=77,callback=None):
@@ -86,7 +111,7 @@ async def main():
         await app.stop();await app.bot_data['shipping_task'];await app.shutdown()
         # Gateway application recreated with the same independent shipping SQLite store.
         app=Application.builder().token('999:synthetic-test-token').request(TelegramDouble()).build()
-        await app.initialize();factory(app,None);await app.start();unavailable=False
+        await app.initialize();factory(app,SimpleNamespace(_start_polling_once=start_polling_once));await app.start();unavailable=False
         for _ in range(40):
             if len(received)==4:break
             await asyncio.sleep(.1)

@@ -62,6 +62,8 @@ def gateway(runtime):
     values=json.loads((LOCAL/'f2-settings.json').read_text())
     shutil.copytree(ROOT/'hermes/shipping-review', PROFILE/'plugins/shipping-review', dirs_exist_ok=True, ignore=shutil.ignore_patterns('__pycache__'))
     env=os.environ.copy();env.update(values)
+    if env.get('TELEGRAM_WEBHOOK_URL'):
+        raise SystemExit('The verified shipping profile requires long polling; remove TELEGRAM_WEBHOOK_URL before startup.')
     env['PYTHONPATH']=os.pathsep.join([str(LOCAL/'f2-python'),str(repo)])
     # Only the dedicated Hermes gateway consumes updates. Never run a separate getUpdates script.
     interpreter=repo/('venv/Scripts/python.exe' if os.name=='nt' else 'venv/bin/python')

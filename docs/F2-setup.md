@@ -94,3 +94,10 @@ Received updates are persisted before forwarding. Proposals in `sending`/`uncert
 `F2_DASHBOARD_URL`, `PORT` (5176), `SIMULATOR_STATE_FILE`, `F2_STATE_FILE`: preview URL and persistent files. URLs contain no credentials. For a real backend, coordinate its authentication mapping and repeat all checks; do not assume the simulator-specific `X-Telegram-Actor` transport assertion is already supported.
 
 Official references: [Hermes plugin handlers](https://hermes-agent.nousresearch.com/docs/developer-guide/plugins), [Hermes Telegram setup](https://hermes-agent.nousresearch.com/docs/user-guide/messaging/telegram). The implementation uses `register_platform_handler`, native PTB dispatch, and `Application.bot` delivery; it does not patch Hermes core or use generic clarification/approval prompts.
+## Offline messages and gateway restarts
+
+The dedicated shipping plugin preserves pending Telegram updates on startup and recovery. Keep using `python scripts/f2_setup.py gateway`; it copies the current project plugin into the dedicated profile and checks the pinned Hermes version. This adjustment does not modify your general Hermes installation. Only long polling is verified; the launcher rejects `TELEGRAM_WEBHOOK_URL`.
+
+You can send a review reply during a short gateway outage. Once the gateway restarts, the reply still needs its usual confirmation and must target a current review. Old reviews are rejected. Live offline replies and confirmation clicks were verified against the simulator on 20 September 2026.
+
+Run only one gateway for this bot token. If Telegram reports a polling conflict, stop the other gateway rather than clearing pending updates. Telegram keeps pending updates for no longer than 24 hours; this is not unlimited offline storage. See [verification notes](F2-verification.md) for the remaining transport crash window and real-backend gate.
