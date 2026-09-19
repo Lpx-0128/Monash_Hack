@@ -152,7 +152,7 @@ const report = {
   results,
 };
 writeFileSync(
-  "docs/F3-evaluation.json",
+  "docs/interpretation-evaluation.json",
   JSON.stringify(report, null, 2) + "\n",
 );
 if (report.passed !== report.samples) process.exitCode = 1;
