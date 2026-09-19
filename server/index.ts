@@ -3,6 +3,12 @@ import express from "express";
 import path from "node:path";
 const { app } = createApp({
   stateFile: process.env.SIMULATOR_STATE_FILE ?? ".local/simulator-state.json",
+  interaction: process.env.F2_BACKEND_TOKEN
+    ? {
+        token: process.env.F2_BACKEND_TOKEN,
+        actors: (process.env.F2_ACTORS ?? "").split(",").filter(Boolean),
+      }
+    : undefined,
 });
 if (process.argv.includes("--dev")) {
   const { createServer } = await import("vite");

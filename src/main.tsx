@@ -16,6 +16,7 @@ initialize()
         <App
           initialFault={config?.fault ?? "none"}
           initialDecisionFault={config?.decision_fault ?? "none"}
+          sharedTelegramDemo={config?.milestone === "F2"}
         />
       </React.StrictMode>,
     ),

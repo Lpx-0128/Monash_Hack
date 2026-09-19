@@ -202,9 +202,11 @@ function Empty({
 export function App({
   initialFault = "none",
   initialDecisionFault = "none",
+  sharedTelegramDemo = false,
 }: {
   initialFault?: string;
   initialDecisionFault?: string;
+  sharedTelegramDemo?: boolean;
 }) {
   const path = useRoute(),
     [refresh, setRefresh] = useState(0),
@@ -433,9 +435,11 @@ export function App({
         <footer>
           Harbor Review{" "}
           <span>
-            F1 ·{" "}
+            {sharedTelegramDemo ? "F2" : "F1"} ·{" "}
             {isSimulation
-              ? "Predefined simulation. No AI extraction or notifications run."
+              ? sharedTelegramDemo
+                ? "Shared synthetic demo. Telegram delivery requires the authorized gateway. No real AI extraction."
+                : "Predefined simulation. No AI extraction or notifications run."
               : "Live API adapter. Review actions available in F1."}
           </span>
         </footer>

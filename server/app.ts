@@ -13,7 +13,12 @@ import { ApiError, DemoStore, statistics, summary } from "./store";
 import { categories, statuses, workflows } from "../shared/validation";
 
 /** Each browser receives a server-issued, DEMO-only guest session. No actor from JSON is trusted. */
-export function createApp(options: { stateFile?: string } = {}) {
+export function createApp(
+  options: {
+    stateFile?: string;
+    interaction?: { token: string; actors: string[] };
+  } = {},
+) {
   const app = express();
   const sessions = new Map<string, { store: DemoStore; touched: number }>();
   if (options.stateFile && existsSync(options.stateFile)) {
@@ -47,6 +52,33 @@ export function createApp(options: { stateFile?: string } = {}) {
   });
   app.get(["/health", "/ready"], (_req, res) => res.json({ status: "ok" }));
   app.use("/api", (req, res, next) => {
+    res.locals.channel = "DASHBOARD";
+    if (req.headers.authorization) {
+      const actor = req.header("X-Telegram-Actor");
+      if (
+        !options.interaction ||
+        req.headers.authorization !== `Bearer ${options.interaction.token}`
+      )
+        return res
+          .status(401)
+          .json({
+            error: {
+              code: "UNAUTHORIZED",
+              message: "Invalid service credential.",
+            },
+          });
+      if (!actor || !options.interaction.actors.includes(actor))
+        return res
+          .status(403)
+          .json({
+            error: {
+              code: "FORBIDDEN",
+              message: "Actor is outside authorized scope.",
+            },
+          });
+      res.locals.channel = "TELEGRAM";
+      res.locals.actor = actor;
+    }
     if (req.method !== "GET" && req.headers.origin) {
       const origin = new URL(req.headers.origin);
       if (origin.host !== req.headers.host)
@@ -60,11 +92,13 @@ export function createApp(options: { stateFile?: string } = {}) {
     const cookies = Object.fromEntries(
       (req.headers.cookie ?? "").split(";").map((v) => v.trim().split("=")),
     );
-    let session = cookies.harbor_demo
-      ? sessions.get(cookies.harbor_demo)
-      : undefined;
+    let session = options.interaction
+      ? sessions.get("shared-f2-demo")
+      : cookies.harbor_demo
+        ? sessions.get(cookies.harbor_demo)
+        : undefined;
     if (!session) {
-      const token = randomUUID();
+      const token = options.interaction ? "shared-f2-demo" : randomUUID();
       session = { store: new DemoStore(), touched: Date.now() };
       sessions.set(token, session);
       res.cookie("harbor_demo", token, {
@@ -77,7 +111,7 @@ export function createApp(options: { stateFile?: string } = {}) {
     }
     session.touched = Date.now();
     res.locals.store = session.store;
-    res.locals.actor = "demo-guest";
+    res.locals.actor ??= "demo-guest";
     res.setHeader("Cache-Control", "no-store");
     next();
   });
@@ -86,7 +120,7 @@ export function createApp(options: { stateFile?: string } = {}) {
     res.json({
       mode: "synthetic",
       contract: "2.1.1",
-      milestone: "F1",
+      milestone: options.interaction ? "F2" : "F1",
       actor_id: "demo-guest",
       decision_fault: store(res).decisionFault,
       fault: store(res).fault,
@@ -218,7 +252,12 @@ export function createApp(options: { stateFile?: string } = {}) {
   });
   app.post("/api/v1/reviews/:id/decision", (req, res) => {
     const before = store(res).snapshot();
-    const c = store(res).decide(req.params.id, req.body, res.locals.actor);
+    const c = store(res).decide(
+      req.params.id,
+      req.body,
+      res.locals.actor,
+      res.locals.channel,
+    );
     try {
       persist();
     } catch (e) {
@@ -233,12 +272,36 @@ export function createApp(options: { stateFile?: string } = {}) {
     }
     res.status(202).json(c);
   });
-  app.post("/api/v1/reviews/:id/notified", () => {
-    throw new ApiError(
-      403,
-      "FORBIDDEN",
-      "Notification updates require an interaction-service identity; outside the F1 dashboard scope.",
-    );
+  app.post("/api/v1/reviews/:id/notified", (req, res) => {
+    if (res.locals.channel !== "TELEGRAM")
+      throw new ApiError(403, "FORBIDDEN", "Interaction identity required.");
+    const { run_id } = z.strictObject({ run_id: z.string() }).parse(req.body);
+    const r = store(res).review(req.params.id),
+      c = store(res).get(r.case_id);
+    if (r.status !== "OPEN")
+      throw new ApiError(409, "REVIEW_ALREADY_CLOSED", "Review closed.");
+    if (r.run_id !== run_id || c.run.run_id !== run_id)
+      throw new ApiError(409, "STALE_RUN", "Run replaced.");
+    const before = store(res).snapshot();
+    if (!r.notified_at) {
+      r.notified_at = new Date().toISOString();
+      c.history.push({
+        event_id: randomUUID(),
+        run_id,
+        at: r.notified_at,
+        type: "REVIEW_NOTIFIED",
+        actor: { kind: "SYSTEM", id: null },
+        summary: "Individual Telegram review delivered.",
+        details: null,
+      });
+      try {
+        persist();
+      } catch (e) {
+        store(res).restore(before);
+        throw e;
+      }
+    }
+    res.json(r);
   });
   app.use("/api", () => {
     throw new ApiError(404, "NOT_FOUND", "Endpoint unavailable.");
@@ -269,7 +332,8 @@ export function createApp(options: { stateFile?: string } = {}) {
   );
   const timer = setInterval(() => {
     for (const [token, s] of sessions) {
-      if (Date.now() - s.touched > 7200000) sessions.delete(token);
+      if (token !== "shared-f2-demo" && Date.now() - s.touched > 7200000)
+        sessions.delete(token);
       else if (
         [...s.store.jobs.values()].some((job) => job.due <= Date.now())
       ) {

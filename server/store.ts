@@ -141,7 +141,12 @@ export class DemoStore {
         }
       }
   }
-  decide(pathId: string, input: unknown, actor: string) {
+  decide(
+    pathId: string,
+    input: unknown,
+    actor: string,
+    channel: "DASHBOARD" | "TELEGRAM" = "DASHBOARD",
+  ) {
     const now = Date.now();
     this.invalidAttempts = this.invalidAttempts.filter((t) => now - t < 60000);
     if (this.invalidAttempts.length >= 12)
@@ -154,7 +159,15 @@ export class DemoStore {
       current = this.get(r.case_id);
     let work: AcceptedWork;
     try {
-      work = prepareDecision(current, r, pathId, input, actor, this.documents);
+      work = prepareDecision(
+        current,
+        r,
+        pathId,
+        input,
+        actor,
+        this.documents,
+        channel,
+      );
     } catch (e) {
       if (e instanceof ApiError && e.status === 422)
         this.invalidAttempts.push(now);

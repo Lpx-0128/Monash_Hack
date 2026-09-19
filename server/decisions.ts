@@ -104,6 +104,7 @@ export function prepareDecision(
   input: unknown,
   actor: string,
   documents: Map<string, string>,
+  channel: "DASHBOARD" | "TELEGRAM" = "DASHBOARD",
 ): AcceptedWork {
   const parsed = decisionSchema.safeParse(input);
   if (!parsed.success)
@@ -114,7 +115,7 @@ export function prepareDecision(
       "Invalid decision shape. Only contract decision fields are accepted.",
     );
   const d = parsed.data!;
-  if (d.actor_id !== actor || d.channel !== "DASHBOARD")
+  if (d.actor_id !== actor || d.channel !== channel)
     throw new ApiError(
       403,
       "FORBIDDEN",

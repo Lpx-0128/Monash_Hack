@@ -136,7 +136,7 @@ export const initialize = () =>
         z.object({
           mode: z.literal("synthetic"),
           contract: z.literal("2.1.1"),
-          milestone: z.literal("F1"),
+          milestone: z.enum(["F1", "F2"]),
           actor_id: z.literal("demo-guest"),
           decision_fault: z.enum(["none", "lost-response", "fail-resumption"]),
           fault: z.enum(["none", "outage", "slow", "denied"]),

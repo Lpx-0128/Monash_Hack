@@ -1,0 +1,535 @@
+import test from "node:test";
+import assert from "node:assert/strict";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import type { AddressInfo } from "node:net";
+import { createApp } from "../server/app";
+import { ReviewApi, RemoteError } from "../interaction/api";
+import {
+  ReviewEngine,
+  type Button,
+  type Incoming,
+  type Transport,
+} from "../interaction/engine";
+const secret = "test-only-service-credential-0000000000";
+class FakeTransport implements Transport {
+  sendAttempts = 0;
+  messages: { id: string; chat: string; text: string; buttons: Button[][] }[] =
+    [];
+  files: { chat: string; filename: string; data: string }[] = [];
+  failDocuments = false;
+  failSend = false;
+  async send(chat: string, text: string, buttons: Button[][] = []) {
+    this.sendAttempts++;
+    if (this.failSend) throw new Error("Injected send failure");
+    const id = String(this.messages.length + 1);
+    this.messages.push({ id, chat, text, buttons });
+    return id;
+  }
+  async document(chat: string, file: { filename: string; data: string }) {
+    if (this.failDocuments) throw new Error("Injected document failure");
+    this.files.push({ chat, ...file });
+    return "file-" + this.files.length;
+  }
+}
+async function setup(t: any) {
+  const dir = mkdtempSync(join(tmpdir(), "harbor-f2-")),
+    app = createApp({
+      stateFile: join(dir, "backend.json"),
+      interaction: { token: secret, actors: ["101", "202"] },
+    }),
+    server = app.app.listen(0, "127.0.0.1");
+  await new Promise<void>((r) => server.once("listening", r));
+  const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`,
+    api = new ReviewApi(base, secret, "101"),
+    transport = new FakeTransport();
+  let now = 100000,
+    seq = 0;
+  const recipients = [
+    { actor: "101", chat: "101" },
+    { actor: "202", chat: "202", operator: true },
+  ];
+  const make = () =>
+    new ReviewEngine(
+      join(dir, "interaction.json"),
+      recipients,
+      (a) => new ReviewApi(base, secret, a),
+      transport,
+      base,
+      () => now,
+    );
+  let engine = make();
+  t.after(async () => {
+    app.dispose();
+    await new Promise<void>((r) => server.close(() => r()));
+    rmSync(dir, { recursive: true, force: true });
+  });
+  return {
+    api,
+    transport,
+    base,
+    dir,
+    get engine() {
+      return engine;
+    },
+    restart() {
+      engine = make();
+    },
+    async tick() {
+      now += 4000;
+      await engine.tick();
+    },
+    async input(extra: Partial<Incoming>) {
+      await engine.inbound({
+        id: String(++seq),
+        actor: "101",
+        chat: "101",
+        message: "in-" + seq,
+        ...extra,
+      });
+    },
+    async click(text: string, index = -1) {
+      const matches = transport.messages.filter((m) =>
+        m.buttons.flat().some((b) => b.text === text),
+      );
+      const m = index < 0 ? matches.at(index)! : matches[index];
+      assert.ok(m, "Button exists: " + text);
+      const b = m.buttons.flat().find((b) => b.text === text)!;
+      await this.input({ message: m.id, callback: b.callback_data });
+    },
+    async review(id: string) {
+      const c = await api.get("demo_" + id),
+        b = engine.binding(c, recipients[0]),
+        key = `${b.run}/${b.review}/101/101`;
+      const d = {
+        ...b,
+        key,
+        type: "review" as const,
+        attempts: 0,
+        due: 0,
+        documents: {},
+        documentAttempts: 0,
+        documentDue: 0,
+      };
+      engine.state.deliveries[key] = d;
+      await engine.deliver(d, c);
+      return transport.messages
+        .filter((m) => m.buttons.length && m.text.includes(c.email.subject))
+        .at(-1)!;
+    },
+    async advance() {
+      await fetch(base + "/api/demo/advance", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: "{}",
+      });
+    },
+    async fault(mode: string) {
+      await fetch(base + "/api/demo/decision-fault", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ mode }),
+      });
+    },
+  };
+}
+test("F2 grounded explicit reply, persisted preview, authenticated callback, 202 and frozen outcome", async (t) => {
+  const h = await setup(t),
+    before = await h.api.get("demo_grounded-input"),
+    m = await h.review("grounded-input");
+  assert.ok(h.transport.files.length);
+  assert.match(
+    Buffer.from(h.transport.files[0].data, "base64").toString(),
+    /synthetic/i,
+  );
+  await h.input({ text: "21707" });
+  assert.equal((await h.api.get(before.case_id)).review?.status, "OPEN");
+  await h.input({ text: "21707", reply: m.id });
+  h.restart();
+  await h.click("Confirm value");
+  let c = await h.api.get(before.case_id);
+  assert.equal(c.workflow_status, "PROCESSING");
+  assert.match(h.transport.messages.at(-1)!.text, /202/);
+  await h.advance();
+  c = await h.api.get(before.case_id);
+  assert.equal(c.resolution?.channel, "TELEGRAM");
+  assert.equal(c.resolution?.actor_id, "101");
+  assert.equal(c.resolution?.final_status, "OK");
+  assert.deepEqual(c.machine_assessment, before.machine_assessment);
+  await h.click("Confirm value");
+  assert.equal(
+    (await h.api.get(before.case_id)).history.filter(
+      (x) => x.type === "DECISION_RECEIVED",
+    ).length,
+    1,
+  );
+});
+test("F2 notification sends stop after bounded failures instead of flooding indefinitely", async (t) => {
+  const h = await setup(t),
+    api = new ReviewApi(h.base, secret, "101");
+  const listed = await api.list();
+  api.list = async () =>
+    listed.filter((c) => c.case_id === "demo_grounded-input");
+  let now = 100000;
+  const engine = new ReviewEngine(
+    join(h.dir, "bounded.json"),
+    [{ actor: "101", chat: "101" }],
+    () => api,
+    h.transport,
+    h.base,
+    () => now,
+  );
+  await engine.inbound({
+    id: "start",
+    actor: "101",
+    chat: "101",
+    message: "1",
+    text: "/start",
+  });
+  const before = h.transport.sendAttempts;
+  h.transport.failSend = true;
+  for (let i = 0; i < 8; i++) {
+    now += 60001;
+    await engine.tick();
+  }
+  assert.equal(h.transport.sendAttempts - before, 5);
+  assert.equal(
+    (await api.get("demo_grounded-input")).review?.notified_at,
+    null,
+  );
+});
+test("F2 unsupported value, cancel/edit invalidates exact override; persisted human evidence", async (t) => {
+  const h = await setup(t),
+    m = await h.review("field-input");
+  await h.input({ reply: m.id, text: "22000" });
+  await h.click("Confirm value");
+  assert.equal((await h.api.get("demo_field-input")).review?.status, "OPEN");
+  const old = h.transport.messages.at(-1)!;
+  await h.input({ reply: m.id, text: "23000" });
+  await h.input({ message: old.id, callback: old.buttons[0][0].callback_data });
+  assert.equal((await h.api.get("demo_field-input")).review?.status, "OPEN");
+  await h.click("Confirm value");
+  h.restart();
+  await h.click("Confirm exact override");
+  await h.advance();
+  const c = await h.api.get("demo_field-input"),
+    v = c.fields.find((f) => f.field === "gross_weight_kg")!.bl!;
+  assert.equal(v.normalized, 23000);
+  assert.equal(v.grounded, false);
+  assert.equal(v.value_origin, "MANUAL_OVERRIDE");
+  assert.equal(c.follow_up, "CORRECTION_REQUIRED");
+  const p = Object.values(h.engine.state.proposals).find(
+    (p) => p.phase === "done",
+  )!;
+  assert.equal(p.confirmation?.actor, "101");
+  assert.equal(
+    p.decision.action === "PROVIDE_VALUE" &&
+      p.decision.override_confirmation?.proposed_value,
+    23000,
+  );
+});
+test("F2 choices, document-role targeting, unsupported candidate and all escapes", async (t) => {
+  for (const id of [
+    "candidate-choice",
+    "document-choice",
+    "unsupported-candidate",
+    "blocked-open",
+    "field-input",
+  ]) {
+    const h = await setup(t),
+      m = await h.review(id),
+      before = await h.api.get("demo_" + id);
+    const isCandidate = id === "unsupported-candidate";
+    if (isCandidate) {
+      const opt = before.review!.options!.find(
+        (o) => o.kind === "VALUE" && o.value.normalized === 23000,
+      )!;
+      await h.click(opt.label);
+      await h.click("Confirm exact override");
+    } else if (id === "document-choice" || id === "candidate-choice") {
+      const opt = before.review!.options!.find((o) => o.kind !== "ESCAPE")!;
+      await h.click(opt.label);
+    } else await h.click(m.buttons[0][0].text);
+    await h.advance();
+    const c = await h.api.get(before.case_id);
+    assert.notEqual(c.review?.status, "OPEN");
+    assert.deepEqual(c.machine_assessment, before.machine_assessment);
+    if (["blocked-open", "field-input"].includes(id))
+      assert.equal(c.workflow_status, "BLOCKED_EXTERNAL");
+  }
+  const h = await setup(t),
+    m = await h.review("candidate-choice");
+  const c = await h.api.get("demo_candidate-choice");
+  await h.click(
+    c.review!.options!.find((o) => o.option_id === "NONE_OF_THESE")!.label,
+  );
+  await h.advance();
+  assert.equal(
+    (await h.api.get(c.case_id)).workflow_status,
+    "BLOCKED_EXTERNAL",
+  );
+});
+test("F2 SI before BL; old replies and reprocessed callbacks never migrate", async (t) => {
+  const h = await setup(t),
+    m = await h.review("both-sides");
+  assert.match(m.text, /SI gross_weight_kg/);
+  await h.input({ reply: m.id, text: "21707" });
+  await h.click("Confirm value");
+  await h.advance();
+  let c = await h.api.get("demo_both-sides");
+  assert.equal(c.review?.side, "BL");
+  await h.input({ reply: m.id, text: "22000" });
+  assert.equal((await h.api.get(c.case_id)).review?.status, "OPEN");
+  const second = await h.review("both-sides");
+  await h.input({ reply: second.id, text: "21707" });
+  const proposal = h.transport.messages.at(-1)!;
+  await h.api.request("/cases/" + c.case_id + "/reprocess", {});
+  await h.input({
+    message: proposal.id,
+    callback: proposal.buttons[0][0].callback_data,
+  });
+  c = await h.api.get(c.case_id);
+  assert.equal(c.workflow_status, "PROCESSING");
+  assert.equal(c.resolution, null);
+});
+test("F2 dashboard race and duplicate update accept one decision only", async (t) => {
+  const h = await setup(t),
+    m = await h.review("grounded-input");
+  await h.input({ reply: m.id, text: "21707" });
+  const p = h.transport.messages.at(-1)!,
+    c = await h.api.get("demo_grounded-input");
+  const dashboard = fetch(
+    h.base + "/api/v1/reviews/" + c.review!.review_id + "/decision",
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        review_id: c.review!.review_id,
+        run_id: c.run.run_id,
+        channel: "DASHBOARD",
+        actor_id: "demo-guest",
+        action: "PROVIDE_VALUE",
+        field: "gross_weight_kg",
+        side: "BL",
+        value: 21707,
+      }),
+    },
+  );
+  await Promise.all([
+    dashboard,
+    h.input({
+      id: "duplicate",
+      message: p.id,
+      callback: p.buttons[0][0].callback_data,
+    }),
+    h.input({
+      id: "duplicate",
+      message: p.id,
+      callback: p.buttons[0][0].callback_data,
+    }),
+  ]);
+  assert.equal(
+    (await h.api.get(c.case_id)).history.filter(
+      (x) => x.type === "DECISION_RECEIVED",
+    ).length,
+    1,
+  );
+});
+test("F2 lost acceptance and resumption failure preserve decision, no automatic resubmission", async (t) => {
+  const h = await setup(t),
+    m = await h.review("grounded-input");
+  await h.input({ reply: m.id, text: "21707" });
+  await h.fault("lost-response");
+  await h.click("Confirm value");
+  h.restart();
+  await h.advance();
+  await h.tick();
+  const c = await h.api.get("demo_grounded-input");
+  assert.equal(
+    c.history.filter((x) => x.type === "DECISION_RECEIVED").length,
+    1,
+  );
+  assert.equal(c.workflow_status, "COMPLETED");
+  const other = await h.review("resume-failure");
+  await h.input({ reply: other.id, text: "22000" });
+  await h.click("Confirm value");
+  await h.click("Confirm exact override");
+  await h.advance();
+  assert.equal(
+    (await h.api.get("demo_resume-failure")).workflow_status,
+    "FAILED",
+  );
+});
+test("F2 send-marker recovery, document failure, persisted dedup, flood and digest isolation", async (t) => {
+  const h = await setup(t);
+  await h.input({ text: "/start" });
+  h.transport.failDocuments = true;
+  await h.tick();
+  const sent = h.transport.messages.filter((m) => m.buttons.length);
+  assert.equal(sent.length, 1);
+  assert.ok(h.transport.messages.some((m) => m.text.includes("queued")));
+  let cases = await h.api.list(),
+    notified = 0;
+  for (const s of cases)
+    if ((await h.api.get(s.case_id)).review?.notified_at) notified++;
+  assert.ok(
+    notified < cases.filter((s) => s.has_open_review).length,
+    "digest does not mark individual reviews",
+  );
+  const before = h.transport.messages.length;
+  h.restart();
+  await h.engine.tick();
+  assert.equal(
+    h.transport.messages.length,
+    before,
+    "restart does not resend review or unchanged digest",
+  );
+  h.transport.failDocuments = false;
+  await h.tick();
+  await h.tick();
+  assert.ok(h.transport.files.length > 0);
+});
+test("F2 unauthorized sender/chat, service spoof, EVAL and cross-scope documents denied", async (t) => {
+  const h = await setup(t),
+    m = await h.review("grounded-input");
+  const n = h.transport.messages.length;
+  await h.input({ actor: "999", reply: m.id, text: "21707" });
+  await h.input({ chat: "999", reply: m.id, text: "21707" });
+  assert.equal(h.transport.messages.length, n);
+  await assert.rejects(
+    new ReviewApi(h.base, "bad", "101").list(),
+    (e: unknown) => e instanceof RemoteError && e.status === 401,
+  );
+  await assert.rejects(
+    new ReviewApi(h.base, secret, "999").list(),
+    (e: unknown) => e instanceof RemoteError && e.status === 403,
+  );
+  await assert.rejects(
+    h.api.request("/cases?run_kind=EVAL"),
+    (e: unknown) => e instanceof RemoteError && e.status === 403,
+  );
+  await assert.rejects(h.api.get("eval_secret"));
+  const c = await h.api.get("demo_grounded-input");
+  await assert.rejects(h.api.document(c, "eval_secret"));
+  await assert.rejects(h.api.request("/documents/eval_secret/content"));
+  const r = await fetch(
+    h.base + "/api/v1/reviews/" + c.review!.review_id + "/notified",
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ run_id: c.run.run_id }),
+    },
+  );
+  assert.equal(r.status, 403);
+});
+test("F2 successful send with failed notified marker resumes marker only after restart", async (t) => {
+  const h = await setup(t);
+  let fail = true;
+  const api = new ReviewApi(h.base, secret, "101"),
+    original = api.notified.bind(api);
+  api.notified = async (r, run) => {
+    if (fail) throw new Error("Injected marker outage");
+    return original(r, run);
+  };
+  const path = join(h.dir, "marker.json"),
+    recipients = [{ actor: "101", chat: "101" }];
+  let engine = new ReviewEngine(
+    path,
+    recipients,
+    () => api,
+    h.transport,
+    h.base,
+    () => 100000,
+  );
+  const c = await api.get("demo_grounded-input"),
+    b = engine.binding(c, recipients[0]),
+    d = {
+      ...b,
+      key: "delivery",
+      message: undefined as string | undefined,
+      type: "review" as const,
+      attempts: 0,
+      due: 0,
+      documents: {},
+      documentAttempts: 0,
+      documentDue: 0,
+    };
+  engine.state.deliveries.delivery = d;
+  await assert.rejects(engine.deliver(d, c));
+  assert.ok(d.message);
+  assert.equal((await api.get(c.case_id)).review?.notified_at, null);
+  const count = h.transport.messages.length;
+  fail = false;
+  engine = new ReviewEngine(path, recipients, () => api, h.transport, h.base);
+  await engine.deliver(
+    engine.state.deliveries.delivery,
+    await api.get(c.case_id),
+  );
+  assert.equal(h.transport.messages.length, count);
+  assert.ok((await api.get(c.case_id)).review?.notified_at);
+  assert.equal(
+    (await api.get(c.case_id)).history.filter(
+      (h) => h.type === "REVIEW_NOTIFIED",
+    ).length,
+    1,
+  );
+});
+test("F2 two sequential reviews complete; wrong actor callback, cancellation and malformed input cannot submit", async (t) => {
+  const h = await setup(t),
+    first = await h.review("both-sides");
+  await h.input({ reply: first.id, text: "1,234" });
+  assert.match(h.transport.messages.at(-1)!.text, /without grouping/);
+  await h.input({ reply: first.id, text: "21707" });
+  const p = h.transport.messages.at(-1)!;
+  await h.input({
+    actor: "202",
+    chat: "202",
+    message: p.id,
+    callback: p.buttons[0][0].callback_data,
+  });
+  assert.equal((await h.api.get("demo_both-sides")).review?.status, "OPEN");
+  await h.click("Cancel");
+  await h.input({ message: p.id, callback: p.buttons[0][0].callback_data });
+  assert.equal((await h.api.get("demo_both-sides")).review?.status, "OPEN");
+  await h.input({ reply: first.id, text: "21707" });
+  await h.click("Confirm value");
+  await h.advance();
+  const second = await h.review("both-sides");
+  assert.match(second.text, /BL gross_weight_kg/);
+  await h.input({ reply: second.id, text: "21707" });
+  await h.click("Confirm value");
+  await h.advance();
+  const c = await h.api.get("demo_both-sides");
+  assert.equal(c.workflow_status, "COMPLETED");
+  assert.equal(c.resolution?.final_status, "OK");
+  assert.equal(
+    c.history.filter((h) => h.type === "DECISION_RECEIVED").length,
+    2,
+  );
+});
+test("F2 notifier correction and operator-only failure, active-run queued recheck and bounded send retries", async (t) => {
+  const h = await setup(t);
+  await h.input({ text: "/start" });
+  await h.input({ actor: "202", chat: "202", text: "/start" });
+  for (let i = 0; i < 28; i++) await h.tick();
+  assert.ok(
+    h.transport.messages.some(
+      (m) => m.text.includes("correction required") && m.buttons.length === 0,
+    ),
+  );
+  const failures = h.transport.messages.filter((m) =>
+    m.text.includes("operator notice"),
+  );
+  assert.ok(failures.length);
+  assert.ok(failures.every((m) => m.chat === "202"));
+  const old = await h.api.get("demo_grounded-input");
+  await h.api.request("/cases/" + old.case_id + "/reprocess", {});
+  const n = h.transport.messages.length;
+  await h.tick();
+  assert.ok(
+    h.transport.messages
+      .slice(n)
+      .every((m) => !m.text.includes(old.run.run_id)),
+  );
+});

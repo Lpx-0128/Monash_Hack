@@ -1,6 +1,8 @@
-# Harbor Review · PRD 2 / F1
+# Harbor Review · PRD 2 / F1 + F2 integration
 
-Responsive shipping-review dashboard with a **stateful synthetic Node API**. Implements Overview, Case list and Case detail against Shared System Contract v2.1.1. All documents and cases are generated; no organizer data, AI calls or notification delivery are used.
+Responsive shipping-review dashboard with a **stateful synthetic Node API**. Implements Overview, Case list and Case detail against Shared System Contract v2.1.1. All documents and cases are generated; no organizer data or AI extraction is used. F2 adds an opt-in Hermes Telegram integration; live delivery requires local bot setup and explicit test-chat authorization.
+
+**First Telegram bot:** follow [F2 setup](docs/F2-setup.md). Default F1 preview remains on 5173; the shared F2 simulator/dashboard uses 5176. See [F2 verification and limits](docs/F2-verification.md) before describing it as a live integration.
 
 ## Run
 
