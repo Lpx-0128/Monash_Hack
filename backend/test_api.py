@@ -1,5 +1,19 @@
 import json
-from schemas import Case
+from fastapi.testclient import TestClient
+from backend.main import app
+from backend.schemas import Case
+import os
+import time
+
+# Remove test database if it exists to start fresh
+if os.path.exists("shipping.db"):
+    # Windows might keep a lock, just a precaution
+    try:
+        os.remove("shipping.db")
+    except Exception as e:
+        print(f"Could not remove db: {e}")
+
+client = TestClient(app)
 
 demo_payload = {
   "schema_version": "2.1.1",
@@ -55,7 +69,23 @@ demo_payload = {
 }
 
 if __name__ == "__main__":
+    print("Testing Pydantic schema...")
     case = Case.model_validate(demo_payload)
-    print("Successfully validated Case!")
-    print(f"Case ID: {case.case_id}")
-    print(f"Received At (should be None): {case.email.received_at}")
+    print("Successfully validated Case schema!")
+    
+    print("Testing POST /cases...")
+    response = client.post("/cases", json=demo_payload)
+    print(f"Status Code: {response.status_code}")
+    if response.status_code != 200:
+        print("Error details:", response.text)
+    
+    print("Testing GET /cases/demo_email_001...")
+    response = client.get("/cases/demo_email_001")
+    print(f"Status Code: {response.status_code}")
+    if response.status_code == 200:
+        data = response.json()
+        print("Successfully retrieved case from database!")
+        print(f"Email ID matched: {data['email']['email_id'] == 'demo_email_001'}")
+        print(f"Received At matched: {data['email']['received_at'] == None}")
+    else:
+        print("Error details:", response.text)

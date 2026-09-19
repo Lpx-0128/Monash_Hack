@@ -141,6 +141,25 @@ class Metrics(BaseModel):
     processing_ms: Optional[int] = None
     est_ai_cost_usd: Optional[float] = None
 
+class MachineAssessment(BaseModel):
+    status: MachineStatus
+    review_reason: Optional[ReviewReason] = None
+    has_defect: bool
+    defect_fields: List[CanonicalField] = []
+    assessed_at: str
+
+class Resolution(BaseModel):
+    review_id: str
+    run_id: str
+    action: DecisionAction
+    value_source: Optional[ValueSource] = None
+    actor_id: str
+    channel: Channel
+    user_message: Optional[str] = None
+    resolved_at: str
+    final_status: MachineStatus
+    final_defect_fields: List[CanonicalField] = []
+
 class Case(BaseModel):
     schema_version: str = "2.1.1"
     case_id: str
@@ -148,10 +167,10 @@ class Case(BaseModel):
     email: EmailInfo
     documents: List[Any] = []
     workflow_status: WorkflowStatus
-    machine_assessment: Optional[MachineStatus] = None
+    machine_assessment: Optional[MachineAssessment] = None
     fields: List[Any] = []
     review: Optional[Any] = None
-    resolution: Optional[MachineStatus] = None
+    resolution: Optional[Resolution] = None
     follow_up: FollowUp = FollowUp.NONE
     failure: Optional[Any] = None
     history: List[HistoryEvent] = []
