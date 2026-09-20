@@ -13,18 +13,10 @@ from backend.database import init_db, engine, Base
 
 @pytest.fixture(scope="session", autouse=True)
 def setup_test_db():
-    if TEST_DB_PATH.exists():
-        try:
-            TEST_DB_PATH.unlink()
-        except Exception:
-            pass
-    init_db()
+    Base.metadata.drop_all(bind=engine)
+    Base.metadata.create_all(bind=engine)
     yield
-    if TEST_DB_PATH.exists():
-        try:
-            TEST_DB_PATH.unlink()
-        except Exception:
-            pass
+    Base.metadata.drop_all(bind=engine)
 
 
 @pytest.fixture

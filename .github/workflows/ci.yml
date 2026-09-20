@@ -32,16 +32,7 @@ jobs:
         env:
           PYTHONPATH: .
         run: |
-          python -m pytest tests/ -v -s --tb=short > pytest_output.log 2>&1 || {
-            EXIT_CODE=$?
-            cat pytest_output.log
-            echo "## Pytest Failure Log" >> $GITHUB_STEP_SUMMARY
-            echo '```' >> $GITHUB_STEP_SUMMARY
-            cat pytest_output.log >> $GITHUB_STEP_SUMMARY
-            echo '```' >> $GITHUB_STEP_SUMMARY
-            exit $EXIT_CODE
-          }
-          cat pytest_output.log
+          python -m pytest tests/ -v
 
       - name: Build Docker image
         run: |
