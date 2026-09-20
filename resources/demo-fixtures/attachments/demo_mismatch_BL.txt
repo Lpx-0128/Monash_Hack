@@ -1,0 +1,14 @@
+BILL OF LADING (DRAFT)
+========================================
+SHIPPER: NORTHWIND PAPER EXPORTS PTE LTD
+  12 KEPPEL ROAD, #08-02; SINGAPORE 089057
+Consignee (Non-Negotiable): ORION IMPORTS SARL
+  HAFENSTRASSE 44; 20457 HAMBURG, GERMANY
+NOTIFY PARTY: MERIDIAN TRADING GMBH
+Load Port: SINGAPORE (SGSIN)
+Discharge Port: HAMBURG, GERMANY (DEHAM)
+Container Count: 4 x 40'HC
+Gross Wt (kgs): 18500 KG
+Export Carrier (vessel, voyage): CORAL STAR V.118E
+Bill of Lading No.: DEMO-BL-77120
+Freight: PREPAID

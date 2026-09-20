@@ -1,6 +1,15 @@
-fastapi>=0.110.0
-uvicorn>=0.28.0
-pydantic>=2.6.0
-sqlalchemy>=2.0.25
-httpx>=0.27.0
-pytest>=8.0.0
+# Backend runtime. Versions are pinned to the set this change was tested against;
+# see docs/person-a-implementation.md for the recorded test run.
+fastapi==0.141.1
+uvicorn==0.53.0
+pydantic==2.13.5
+sqlalchemy==2.0.54
+httpx==0.28.1
+
+# Person A document parsing.
+pypdf==6.19.0          # page text extraction, layout mode, image-only detection
+python-docx==1.2.0     # body paragraphs and tables in document order
+openpyxl==3.1.5        # read-only workbooks, cached formula values
+
+# Test tooling.
+pytest==9.1.1

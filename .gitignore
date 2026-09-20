@@ -14,12 +14,15 @@ build/
 venv/
 env/
 
-# SQLite databases
+# SQLite databases, including WAL sidecar files
 *.db
+*.db-shm
+*.db-wal
 *.sqlite
 *.sqlite3
 
 # Test / scratch artefacts
+.local/
 submission.json
 export_*.json
 manifest*.json
@@ -33,6 +36,7 @@ validation_report.*
 .DS_Store
 Thumbs.db
 
-# dotenv
+# dotenv - real configuration stays private; the secret-free example is tracked
 .env
 .env.*
+!.env.example

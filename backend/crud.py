@@ -1,6 +1,9 @@
 from sqlalchemy.orm import Session
 from sqlalchemy import text as sa_text, func
 from . import models, schemas
+from .intelligence import config as config_module
+from .intelligence import ingestion
+from .intelligence.types import SourceDataIssue
 import json
 import copy
 from datetime import datetime, timezone
@@ -102,60 +105,90 @@ def update_case(db: Session, db_case: models.CaseModel, case: schemas.Case):
     return map_db_to_schema(db_case)
 
 
-def _load_inbox_email(email_id: str):
-    """Attempt to load real email metadata and attachments from resources if available."""
-    from pathlib import Path
-    import hashlib
+# --- Person A source adapter ------------------------------------------------
+# Sources come from a configured registry. Nothing here invents a hash, a
+# document, a role or a receipt time, and participant bytes are never marked
+# demo-safe.
 
-    bundle_root = Path(__file__).resolve().parent.parent / "resources" / "sdoc-hackathon-bundle"
-    inbox_file = bundle_root / "inbox" / f"{email_id}.json"
-
-    if inbox_file.exists():
-        try:
-            data = json.loads(inbox_file.read_text(encoding="utf-8"))
-            from_addr = data.get("from", "unknown@example.com")
-            subject = data.get("subject", "Pending classification")
-            docs = []
-            for att in data.get("attachments", []):
-                att_path = bundle_root / att
-                filename = Path(att).name
-                doc_id = filename
-                role = schemas.DocumentRole.SI if "_SI." in filename else (
-                    schemas.DocumentRole.BL if "_BL." in filename else schemas.DocumentRole.OTHER
-                )
-                content_hash = "mock_hash"
-                size_bytes = None
-                if att_path.exists():
-                    b = att_path.read_bytes()
-                    content_hash = hashlib.sha256(b).hexdigest()
-                    size_bytes = len(b)
-
-                media_type = "text/plain"
-                if filename.endswith(".pdf"):
-                    media_type = "application/pdf"
-                elif filename.endswith(".docx"):
-                    media_type = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-                elif filename.endswith(".xlsx"):
-                    media_type = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-
-                docs.append(schemas.DocumentRef(
-                    document_id=doc_id,
-                    role=role,
-                    filename=filename,
-                    media_type=media_type,
-                    size_bytes=size_bytes,
-                    content_hash=content_hash,
-                    demo_safe=True,
-                    parse_status="OK"
-                ))
-            return from_addr, subject, docs
-        except Exception:
-            pass
-
-    return "unknown@example.com", "Pending classification", []
+_INTELLIGENCE_CONFIG = None
+_INTELLIGENCE_REGISTRIES = None
 
 
-def create_case_with_job(db: Session, email_id: str, run_kind: schemas.RunKind = schemas.RunKind.DEMO) -> schemas.Case:
+def intelligence_config():
+    """The validated Person A configuration for this process."""
+    global _INTELLIGENCE_CONFIG
+    if _INTELLIGENCE_CONFIG is None:
+        _INTELLIGENCE_CONFIG = config_module.load_config()
+    return _INTELLIGENCE_CONFIG
+
+
+def intelligence_registries():
+    """The configured participant and synthetic-demo source registries."""
+    global _INTELLIGENCE_REGISTRIES
+    if _INTELLIGENCE_REGISTRIES is None:
+        _INTELLIGENCE_REGISTRIES = ingestion.build_registries(intelligence_config())
+    return _INTELLIGENCE_REGISTRIES
+
+
+def reset_intelligence_cache():
+    """Drop the cached config and registries. Used by tests that repoint roots."""
+    global _INTELLIGENCE_CONFIG, _INTELLIGENCE_REGISTRIES
+    _INTELLIGENCE_CONFIG = None
+    _INTELLIGENCE_REGISTRIES = None
+
+
+def load_input_snapshot(email_id: str, run_kind: schemas.RunKind, *,
+                        public_caller: bool = False) -> ingestion.InputSnapshot:
+    """Map a registered source record into this run's immutable input snapshot.
+
+    Raises ``SourceDataIssue`` for an email id that is not registered anywhere:
+    an unknown id never produces a fabricated source. When
+    ``INTELLIGENCE_ALLOW_PUBLIC_PARTICIPANT_INGEST`` is off, a public caller may
+    ingest only synthetic demo fixtures; participant ingestion then needs the
+    authenticated operator path Person B owns.
+    """
+    config = intelligence_config()
+    if public_caller and not config.allow_public_participant_ingest:
+        registry = ingestion.find_registry(email_id, intelligence_registries())
+        if registry is not None and registry.kind == ingestion.PARTICIPANT:
+            raise SourceDataIssue(
+                f"{email_id!r} is a participant source and public ingestion is disabled"
+            )
+    return ingestion.ingest_case(
+        email_id,
+        namespace=run_kind.value,
+        case_id=email_id,
+        registries=intelligence_registries(),
+        config=intelligence_config(),
+    )
+
+
+def snapshot_to_document_refs(snapshot: ingestion.InputSnapshot) -> list[schemas.DocumentRef]:
+    """Contract DocumentRefs for a freshly ingested, not-yet-parsed input.
+
+    Roles start UNKNOWN because only document content may assign them, and a
+    missing file carries no content hash.
+    """
+    refs = []
+    for source in snapshot.sources:
+        if not source.present:
+            continue
+        refs.append(schemas.DocumentRef(
+            document_id=source.document_id,
+            role=schemas.DocumentRole.UNKNOWN,
+            filename=source.filename,
+            media_type=source.media_type,
+            size_bytes=source.size_bytes,
+            content_hash=source.content_hash or "",
+            demo_safe=source.demo_safe,
+            parse_status="NOT_PARSED",
+        ))
+    return refs
+
+
+def create_case_with_job(db: Session, email_id: str,
+                         run_kind: schemas.RunKind = schemas.RunKind.DEMO,
+                         public_caller: bool = False) -> schemas.Case:
     """Create the initial case AND its first PROCESS_CASE job in one commit.
 
     Prevents the crash window where a case exists in PROCESSING but no job
@@ -165,7 +198,8 @@ def create_case_with_job(db: Session, email_id: str, run_kind: schemas.RunKind =
     run_id = f"run_{uuid.uuid4().hex[:8]}"
     job_id = f"job_{uuid.uuid4().hex[:8]}"
 
-    from_addr, subject, docs = _load_inbox_email(email_id)
+    snapshot = load_input_snapshot(email_id, run_kind, public_caller=public_caller)
+    docs = snapshot_to_document_refs(snapshot)
 
     case_schema = schemas.Case(
         schema_version="2.1.1",
@@ -174,15 +208,17 @@ def create_case_with_job(db: Session, email_id: str, run_kind: schemas.RunKind =
             run_id=run_id,
             kind=run_kind,
             started_at=now,
-            input_version="v1",
-            config_version="v1",
-            demo_safe=(run_kind == schemas.RunKind.DEMO)
+            input_version=snapshot.input_version,
+            config_version=intelligence_config().config_identity(),
+            # A DEMO run is only demo-safe when every source in it is.
+            demo_safe=(run_kind == schemas.RunKind.DEMO and snapshot.demo_safe)
         ),
         email=schemas.EmailInfo(**{
             "email_id": email_id,
-            "from": from_addr,
-            "subject": subject,
-            "received_at": None,
+            "from": snapshot.from_address,
+            "subject": snapshot.subject,
+            # Unknown receipt time stays explicitly null; it is never inferred.
+            "received_at": snapshot.received_at,
             "category": None,
             "classified_by": None,
             "classification_reason": None
@@ -289,6 +325,65 @@ def update_case_and_create_job(db: Session, db_case: models.CaseModel, case: sch
     db.refresh(db_case)
 
 
+def update_case_with_decision(db: Session, db_case: models.CaseModel, case: schemas.Case,
+                             decision, requirement, now: str):
+    """Persist the case, the accepted decision and its APPLY_DECISION job together.
+
+    One commit, so a crash can never leave a closed review with no pending work,
+    nor an accepted decision that no job will ever apply.
+    """
+    from .intelligence import wire
+
+    case_data = case.model_dump(mode='json', by_alias=True)
+    db_case.workflow_status = case_data["workflow_status"]
+    db_case.machine_assessment = case_data.get("machine_assessment")
+    db_case.resolution = case_data.get("resolution")
+    db_case.follow_up = case_data.get("follow_up")
+    db_case.updated_at = case_data["updated_at"]
+    db_case.completed_at = case_data.get("completed_at")
+    db_case.run = case_data["run"]
+    db_case.email = case_data["email"]
+    db_case.documents = case_data.get("documents", [])
+    db_case.fields_data = case_data.get("fields", [])
+    db_case.review = case_data.get("review")
+    db_case.failure = case_data.get("failure")
+    db_case.history = case_data.get("history", [])
+    db_case.metrics = case_data["metrics"]
+
+    job_id = f"job_{uuid.uuid4().hex[:8]}"
+    sequence = (
+        db.query(func.count(models.AcceptedDecisionModel.decision_id))
+        .filter(models.AcceptedDecisionModel.case_id == case.case_id)
+        .filter(models.AcceptedDecisionModel.run_id == case.run.run_id)
+        .scalar() or 0
+    )
+    db.add(models.AcceptedDecisionModel(
+        decision_id=decision.decision_id,
+        case_id=case.case_id,
+        run_id=case.run.run_id,
+        review_id=decision.review_id,
+        job_id=job_id,
+        sequence=sequence,
+        payload=wire.decision_to_json(decision),
+        review_requirement=wire.review_requirement_to_json(requirement),
+        created_at=now,
+        applied_at=None,
+    ))
+    db.add(models.JobModel(
+        job_id=job_id,
+        case_id=case.case_id,
+        run_id=case.run.run_id,
+        action="APPLY_DECISION",
+        status="PENDING",
+        attempts=[],
+        created_at=now,
+        updated_at=now,
+    ))
+    db.commit()   # case + decision + job, or none of them
+    db.refresh(db_case)
+    return map_db_to_schema(db_case)
+
+
 def reprocess_case_atomic(db: Session, db_case: models.CaseModel, schema_case: schemas.Case) -> schemas.Case:
     """Supersede stale jobs, rewrite the case, and insert the new PROCESS_CASE job — all in one commit.
 
@@ -305,6 +400,15 @@ def reprocess_case_atomic(db: Session, db_case: models.CaseModel, schema_case: s
             "WHERE case_id=:case_id AND status IN ('PENDING','RUNNING')"
         ),
         {"now": now, "case_id": db_case.case_id}
+    )
+
+    # Step 1b: unapplied decisions from the superseded run must never be applied
+    db.execute(
+        sa_text(
+            "DELETE FROM accepted_decisions "
+            "WHERE case_id=:case_id AND applied_at IS NULL"
+        ),
+        {"case_id": db_case.case_id}
     )
 
     # Step 2: apply case mutations
