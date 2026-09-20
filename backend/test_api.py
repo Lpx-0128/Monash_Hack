@@ -44,7 +44,47 @@ if __name__ == "__main__":
     else:
         print("Error details:", response.text)
 
-    print("Testing duplicate POST /cases...")
+    print("Testing GET /reviews...")
+    review_response = client.get("/reviews")
+    if review_response.status_code == 200:
+        reviews = review_response.json()
+        print(f"Total open reviews: {len(reviews)}")
+        if len(reviews) > 0:
+            review_item = reviews[0]
+            review_id = review_item["review"]["review_id"]
+            run_id = review_item["review"]["run_id"]
+            
+            print(f"Testing POST /reviews/{review_id}/notified...")
+            notify_resp = client.post(f"/reviews/{review_id}/notified", json={"run_id": run_id})
+            print(f"Notified Status Code: {notify_resp.status_code}")
+            
+            print(f"Testing POST /reviews/{review_id}/decision...")
+            decision_payload = {
+                "review_id": review_id,
+                "run_id": run_id,
+                "channel": "DASHBOARD",
+                "actor_id": "user_123",
+                "action": "PROVIDE_VALUE",
+                "field": "gross_weight_kg",
+                "side": "BL",
+                "value": "15000",
+                "override_confirmation": {
+                    "review_id": review_id,
+                    "run_id": run_id,
+                    "field": "gross_weight_kg",
+                    "side": "BL",
+                    "proposed_value": "15000",
+                    "confirmed": True
+                }
+            }
+            decision_resp = client.post(f"/reviews/{review_id}/decision", json=decision_payload)
+            print(f"Decision Status Code: {decision_resp.status_code}")
+            
+            # Check if case went back to processing
+            case_resp = client.get(f"/cases/{case_id}")
+            print(f"Workflow status after decision: {case_resp.json()['workflow_status']}")
+    else:
+        print("Error in /reviews endpoint:", review_response.text)
     dup_response = client.post("/cases", json=demo_email_payload)
     print(f"Duplicate Status Code: {dup_response.status_code} (Expected 200)")
     

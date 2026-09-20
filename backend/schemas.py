@@ -141,6 +141,47 @@ class Metrics(BaseModel):
     processing_ms: Optional[int] = None
     est_ai_cost_usd: Optional[float] = None
 
+class OverrideConfirmation(BaseModel):
+    review_id: str
+    run_id: str
+    field: CanonicalField
+    side: Side
+    proposed_value: Any
+    confirmed: bool
+
+class ReviewOption(BaseModel):
+    option_id: str
+    kind: str  # "DOCUMENT", "VALUE", "ESCAPE"
+    label: str
+    document_id: Optional[str] = None
+    value: Optional[Any] = None
+
+class SourceDocument(BaseModel):
+    document_id: str
+    filename: str
+    media_type: str
+
+class Review(BaseModel):
+    review_id: str
+    case_id: str
+    run_id: str
+    status: ReviewStatus
+    scope: ReviewScope
+    ui_mode: ReviewUiMode
+    reason: ReviewReason
+    field: Optional[CanonicalField] = None
+    side: Optional[Side] = None
+    target_role: Optional[Side] = None
+    question: str
+    context_summary: str
+    options: Optional[List[ReviewOption]] = None
+    allowed_actions: List[DecisionAction]
+    source_documents: List[SourceDocument]
+    created_at: str
+    notified_at: Optional[str] = None
+    closed_at: Optional[str] = None
+    close_reason: Optional[str] = None
+
 class MachineAssessment(BaseModel):
     status: MachineStatus
     review_reason: Optional[ReviewReason] = None
@@ -196,3 +237,23 @@ class CaseSummary(BaseModel):
     has_open_review: bool = False
     run_kind: RunKind
     updated_at: str
+
+class ReviewListItem(BaseModel):
+    review: Review
+    case: CaseSummary
+
+class DecisionRequest(BaseModel):
+    review_id: str
+    run_id: str
+    channel: Channel
+    actor_id: str
+    user_message: Optional[str] = None
+    action: DecisionAction
+    field: Optional[CanonicalField] = None
+    side: Optional[Side] = None
+    value: Optional[Any] = None
+    option_id: Optional[str] = None
+    override_confirmation: Optional[OverrideConfirmation] = None
+
+class NotifiedRequest(BaseModel):
+    run_id: str

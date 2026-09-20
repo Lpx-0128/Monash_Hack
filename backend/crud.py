@@ -10,6 +10,22 @@ def get_case(db: Session, case_id: str):
 def get_cases(db: Session, skip: int = 0, limit: int = 100):
     return db.query(models.CaseModel).offset(skip).limit(limit).all()
 
+def get_reviews(db: Session, run_kind: schemas.RunKind = None):
+    # For now, just load all cases and filter in Python
+    cases = db.query(models.CaseModel).all()
+    results = []
+    for c in cases:
+        schema_case = map_db_to_schema(c)
+        if schema_case.review and schema_case.review.get("status") == schemas.ReviewStatus.OPEN:
+            if run_kind and schema_case.run.kind != run_kind:
+                continue
+            review_obj = schemas.Review(**schema_case.review)
+            results.append(schemas.ReviewListItem(
+                review=review_obj,
+                case=map_case_to_summary(schema_case)
+            ))
+    return results
+
 def create_case(db: Session, case: schemas.Case):
     case_data = case.model_dump(mode='json', by_alias=True)
     

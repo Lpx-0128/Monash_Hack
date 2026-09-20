@@ -40,16 +40,41 @@ def process_case(case_id: str):
         
         # In a real run, this would be either COMPLETED (if OK/MISMATCH) 
         # or AWAITING_HUMAN (if NEEDS_REVIEW).
-        # We will just mark it as COMPLETED for now to show progression.
-        case.workflow_status = schemas.WorkflowStatus.COMPLETED
+        # We will mark it as NEEDS_REVIEW for now to test the review endpoints.
+        case.workflow_status = schemas.WorkflowStatus.AWAITING_HUMAN
         case.machine_assessment = schemas.MachineAssessment(
-            status=schemas.MachineStatus.OK,
+            status=schemas.MachineStatus.NEEDS_REVIEW,
+            review_reason=schemas.ReviewReason.unreadable,
             has_defect=False,
-            defect_fields=[],
+            defect_fields=[schemas.CanonicalField.gross_weight_kg],
             assessed_at=now
         )
+        
+        # Create a mock review
+        case.review = {
+            "review_id": f"rev_{uuid.uuid4().hex[:8]}",
+            "case_id": case.case_id,
+            "run_id": case.run.run_id,
+            "status": schemas.ReviewStatus.OPEN,
+            "scope": schemas.ReviewScope.FIELD,
+            "ui_mode": schemas.ReviewUiMode.VALUE_INPUT,
+            "reason": schemas.ReviewReason.unreadable,
+            "field": schemas.CanonicalField.gross_weight_kg,
+            "side": schemas.Side.BL,
+            "target_role": None,
+            "question": "Please enter the gross weight in kg from the BL document.",
+            "context_summary": "The AI could not read the gross weight on the scanned document.",
+            "options": None,
+            "allowed_actions": [schemas.DecisionAction.PROVIDE_VALUE],
+            "source_documents": [],
+            "created_at": now,
+            "notified_at": None,
+            "closed_at": None,
+            "close_reason": None
+        }
+        
         case.updated_at = now
-        case.completed_at = now
+        case.completed_at = None
         
         crud.update_case(db, db_case, case)
     finally:
