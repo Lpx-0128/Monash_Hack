@@ -1,5 +1,6 @@
-from fastapi import FastAPI, Depends, HTTPException, BackgroundTasks, status, Response
-from fastapi.responses import FileResponse
+from fastapi import FastAPI, Depends, HTTPException, BackgroundTasks, status, Response, Request, APIRouter
+from fastapi.responses import FileResponse, JSONResponse
+from fastapi.exceptions import RequestValidationError
 from sqlalchemy.orm import Session
 from typing import List, Optional
 from datetime import datetime, timezone
@@ -12,7 +13,30 @@ models.Base.metadata.create_all(bind=engine)
 
 app = FastAPI(title="Shipping Document Verification API", version="2.1.1")
 
+@app.exception_handler(HTTPException)
+async def http_exception_handler(request: Request, exc: HTTPException):
+    # Contract error envelope
+    return JSONResponse(
+        status_code=exc.status_code,
+        content={"error": {"code": exc.detail, "message": getattr(exc, "message", exc.detail)}}
+    )
+
+@app.exception_handler(RequestValidationError)
+async def validation_exception_handler(request: Request, exc: RequestValidationError):
+    return JSONResponse(
+        status_code=422,
+        content={"error": {"code": "VALIDATION_ERROR", "message": str(exc)}}
+    )
+
+api_router = APIRouter(prefix="/api/v1")
+
 @app.get("/health")
+def health_check():
+    return {"status": "OK", "version": "2.1.1"}
+
+@app.get("/ready")
+def readiness_check():
+    return {"status": "READY"}
 def health_check():
     return {"status": "OK", "version": "2.1.1"}
 
@@ -330,3 +354,6 @@ def get_stats(run_kind: schemas.RunKind = schemas.RunKind.DEMO, db: Session = De
         ai_calls_total=ai_calls_total,
         avg_processing_ms=avg_processing
     )
+# Start durable worker loop
+from .worker_loop import start_worker_thread
+start_worker_thread()

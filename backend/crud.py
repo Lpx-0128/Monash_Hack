@@ -146,9 +146,9 @@ def map_db_to_schema(db_case: models.CaseModel) -> schemas.Case:
         "email": db_case.email,
         "documents": db_case.documents,
         "fields": db_case.fields_data,
-        "review": dict(db_case.review) if db_case.review else None,
-        "failure": db_case.failure,
-        "history": db_case.history,
+        "review": json.loads(json.dumps(db_case.review)) if db_case.review else None,
+        "failure": json.loads(json.dumps(db_case.failure)) if db_case.failure else None,
+        "history": json.loads(json.dumps(db_case.history)) if db_case.history else [],
         "metrics": db_case.metrics,
     }
     return schemas.Case(**data)
