@@ -15,7 +15,7 @@ import logging
 import json
 from datetime import datetime, timezone
 from sqlalchemy import text
-from . import crud, worker
+from . import crud, worker, schemas
 from .database import SessionLocal
 
 logger = logging.getLogger(__name__)
@@ -28,11 +28,7 @@ def _now() -> str:
 
 
 def _recover_stale_running_jobs(db):
-    """Reset RUNNING jobs left over from a previous process crash.
-
-    NOTE: only safe with a single worker. With multiple workers, a healthy
-    RUNNING job in another process would be incorrectly reset.
-    """
+    """Reset RUNNING jobs left over from a previous process crash."""
     now = _now()
     result = db.execute(
         text("UPDATE jobs SET status='PENDING', updated_at=:now WHERE status='RUNNING'"),
@@ -44,11 +40,7 @@ def _recover_stale_running_jobs(db):
 
 
 def _claim_job(db):
-    """Atomically claim one PENDING job by setting it to RUNNING.
-
-    Uses a conditional UPDATE so two concurrent workers cannot both claim the
-    same job.  Returns the claimed JobModel or None.
-    """
+    """Atomically claim one PENDING job by setting it to RUNNING."""
     from . import models
     job = (
         db.query(models.JobModel)
@@ -74,11 +66,7 @@ def _claim_job(db):
 
 
 def _complete_job(db, job_id: str):
-    """Mark a job COMPLETED only if it is still RUNNING.
-
-    If a reprocess raced and set status=SUPERSEDED, this update is a no-op, so
-    the stale result is silently dropped.
-    """
+    """Mark a job COMPLETED only if it is still RUNNING."""
     updated = db.execute(
         text(
             "UPDATE jobs SET status='COMPLETED', updated_at=:now "
@@ -107,7 +95,6 @@ def _emit_retry_triggered(db, case_id: str, job_id: str, attempt_no: int, error_
     if db_case is None:
         return
     import uuid
-    from . import schemas
     schema_case = crud.map_db_to_schema(db_case)
     now = _now()
     schema_case.history.append(
@@ -115,7 +102,7 @@ def _emit_retry_triggered(db, case_id: str, job_id: str, attempt_no: int, error_
             event_id=f"evt_{uuid.uuid4().hex[:8]}",
             run_id=schema_case.run.run_id,
             at=now,
-            type="RETRY_TRIGGERED",
+            type=schemas.HistoryEventType.RETRY_TRIGGERED.value,
             actor=schemas.Actor(kind="SYSTEM", id=None),
             summary=f"Job {job_id} attempt {attempt_no} failed, retrying: {error_msg[:120]}"
         )
@@ -158,29 +145,25 @@ def _handle_job_failure(db, job, error_msg: str):
 
 
 def _mark_case_failed(db, case_id: str, error_msg: str, now: str, attempt_count: int):
-    """Set workflow_status=FAILED and write a contract-shaped failure record.
-
-    Contract §9 failure shape: {step: str, message: str, attempts: int}
-    """
+    """Set workflow_status=FAILED and write a contract-shaped failure record."""
     db_case = crud.get_case(db, case_id)
     if db_case is None:
         return
     import uuid
-    from . import schemas
     schema_case = crud.map_db_to_schema(db_case)
     schema_case.workflow_status = schemas.WorkflowStatus.FAILED
-    schema_case.failure = {
-        "step": "WORKER",
-        "message": error_msg,
-        "attempts": attempt_count,   # integer, not the list
-    }
+    schema_case.failure = schemas.FailureDetail(
+        step="WORKER",
+        message=error_msg,
+        attempts=attempt_count,
+    )
     schema_case.updated_at = now
     schema_case.history.append(
         schemas.HistoryEvent(
             event_id=f"evt_{uuid.uuid4().hex[:8]}",
             run_id=schema_case.run.run_id,
             at=now,
-            type="WORKER_FAILED",
+            type=schemas.HistoryEventType.PROCESSING_FAILED.value,
             actor=schemas.Actor(kind="SYSTEM", id=None),
             summary=f"Worker permanently failed after {attempt_count} attempts: {error_msg[:120]}"
         )
@@ -189,11 +172,7 @@ def _mark_case_failed(db, case_id: str, error_msg: str, now: str, attempt_count:
 
 
 def worker_loop(stop_event: threading.Event = None, poll_interval: int = 1):
-    """Continuously poll and process pending jobs.
-
-    Skips the sleep when a job is found, so back-to-back jobs don't each wait
-    one full poll cycle.  Only sleeps when the queue is empty.
-    """
+    """Continuously poll and process pending jobs."""
     if stop_event is None:
         stop_event = threading.Event()
 
@@ -209,28 +188,42 @@ def worker_loop(stop_event: threading.Event = None, poll_interval: int = 1):
             if job is not None:
                 try:
                     _process_job(job)
-                    _complete_job(db, job.job_id)   # guarded: only if still RUNNING
+                    _complete_job(db, job.job_id)
                 except Exception as exc:
                     _handle_job_failure(db, job, str(exc))
-                # Don't sleep — drain the queue before resting
                 continue
         except Exception as outer_exc:
             logger.exception("Unexpected error in worker loop: %s", outer_exc)
         finally:
             db.close()
 
-        # Only sleep when there was nothing to do
-        time.sleep(poll_interval)
+        # Check stop_event during wait
+        stop_event.wait(timeout=poll_interval)
+
+
+_worker_thread = None
+_stop_event = None
 
 
 def start_worker_thread(poll_interval: int = 1) -> threading.Thread:
     """Start the worker loop in a daemon thread. Call exactly once at app startup."""
-    thread = threading.Thread(
+    global _worker_thread, _stop_event
+    _stop_event = threading.Event()
+    _worker_thread = threading.Thread(
         target=worker_loop,
-        kwargs={"poll_interval": poll_interval},
+        kwargs={"stop_event": _stop_event, "poll_interval": poll_interval},
         daemon=True,
         name="worker-loop"
     )
-    thread.start()
-    logger.info("Worker loop started (poll_interval=%ds, thread=%s)", poll_interval, thread.name)
-    return thread
+    _worker_thread.start()
+    logger.info("Worker loop started (poll_interval=%ds, thread=%s)", poll_interval, _worker_thread.name)
+    return _worker_thread
+
+
+def stop_worker_thread():
+    """Stop the worker loop gracefully."""
+    global _worker_thread, _stop_event
+    if _stop_event:
+        _stop_event.set()
+    if _worker_thread and _worker_thread.is_alive():
+        _worker_thread.join(timeout=3)

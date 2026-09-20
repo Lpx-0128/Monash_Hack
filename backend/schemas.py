@@ -1,6 +1,6 @@
 from enum import Enum
 from typing import List, Optional, Any, Union, Literal
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ConfigDict
 
 
 class EmailCategory(str, Enum):
@@ -266,8 +266,7 @@ class EmailInfo(BaseModel):
     classified_by: Optional[ResolvedBy] = None
     classification_reason: Optional[str] = None
 
-    class Config:
-        populate_by_name = True
+    model_config = ConfigDict(populate_by_name=True)
 
 
 class Actor(BaseModel):
@@ -394,8 +393,7 @@ class CaseSummary(BaseModel):
     run_kind: RunKind
     updated_at: str
 
-    class Config:
-        populate_by_name = True
+    model_config = ConfigDict(populate_by_name=True)
 
 
 class ReviewListItem(BaseModel):
