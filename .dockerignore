@@ -1,0 +1,15 @@
+.git/
+.gitignore
+__pycache__/
+*/__pycache__/
+*/*/__pycache__/
+*.pyc
+*.pyo
+venv/
+*/venv/
+.env
+shipping.db*
+submission.json
+manifest.json
+.pytest_cache/
+.github/
