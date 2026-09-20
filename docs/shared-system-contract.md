@@ -1,10 +1,10 @@
-# Shared System Contract — v2.1.1
+# Shared System Contract — v2.1.2
 
-**Date:** 19 September 2026
+**Date:** 20 September 2026
 
-**Authority:** This document governs [PRD 1 — Backend Automation & Intelligence Layer](./prd-1-backend.md) and [PRD 2 — Interaction / Frontend Layer](./prd-2-interaction.md). Neither PRD may redefine its types, semantics, invariants, or API behavior.
+**Authority:** This document governs [PRD 1 — Backend Automation & Intelligence Layer](./prd-1-backend.md) and [PRD 2 — Interaction / Frontend Layer](./prd-2-interaction.md). It also governs [PRD 3 — Voice & Attention Orchestration Layer](./prd-3-voice-attention.md). No PRD may redefine its types, semantics, invariants, or API behavior.
 
-**Status:** Consolidated implementation baseline. Team sign-off and the explicitly listed organizer verification items remain release gates; this document does not claim they have already happened.
+**Status:** Coordinated adoption pending. v2.1.1 remains the deployed implementation baseline until A/B/C approve and deploy the v2.1.2 migration in §7.3. This document specifies the next target contract; editing it does not enable VOICE in existing validators. Organizer verification and voice integration gates remain explicit; no completed team sign-off is claimed.
 
 ## 1. Purpose, precedence, and source basis
 
@@ -12,7 +12,7 @@ Automate shipping-inbox triage and compare the Shipping Instruction (SI, the ref
 
 The product promise is **“Don’t monitor AI. Let it chase you.”** Users receive proactive requests or notices and can use the lowest-friction safe channel. Some problems require a corrected external document; the promise is freedom from constant monitoring, not universal resolution inside Telegram.
 
-This revision supersedes v2.1 and replaces v2.0 and the older contract, revision logs, and conflicting PRD passages. It preserves backend-owned truth, polling, Telegram plus dashboard, immutable machine assessments per run, separate operational resolution, and separate EVAL/DEMO execution. It does not reintroduce an event bus, case_version, separate evidence service, or separate audit API.
+On coordinated adoption, this revision supersedes v2.1.1 and v2.1 and replaces v2.0 and the older contract, revision logs, and conflicting PRD passages. It preserves backend-owned truth, polling, Telegram plus dashboard with the separately gated voice extension, immutable machine assessments per run, separate operational resolution, and separate EVAL/DEMO execution. It does not reintroduce an event bus, case_version, separate evidence service, or separate audit API.
 
 Source basis:
 
@@ -29,7 +29,7 @@ Only participant-facing materials and the permitted evaluation interface may sup
 |---|---|
 | A — Document Intelligence | Ingestion adapter, parsing, extraction, evidence, grounding, normalization, comparison, mismatch verification, dependency recomputation |
 | B — Platform + Validation | Cloud execution, state, API, reviews, durable work, retries, runs, access boundaries, export, evaluation harness, validation report |
-| C — Interaction + Submission | Dashboard, Telegram, routing, notification delivery, confirmation UX, interaction tests; submission packaging after frontend MUST work |
+| C — Interaction + Submission | Dashboard, Telegram, voice adapter and attention policy, shared routing, notification delivery, confirmation UX, interaction tests; submission packaging after frontend MUST work |
 
 The backend owns truth and execution. Interaction clients display API data and submit structured decisions; they never read/write backend storage directly or independently decide shipping outcomes.
 
@@ -56,7 +56,7 @@ Checkpoints: shared types/mocks approved; first real Case rendered; first real h
 | ValueOrigin | DOCUMENT_EXTRACTED, DOCUMENT_CONFIRMED, MANUAL_OVERRIDE |
 | ValueSource (human decisions) | DOCUMENT_CONFIRMED, MANUAL_OVERRIDE |
 | DocumentRole / Side | UNKNOWN, SI, BL, OTHER / SI, BL |
-| RunKind / Channel | EVAL, DEMO / TELEGRAM, DASHBOARD |
+| RunKind / Channel | EVAL, DEMO / TELEGRAM, DASHBOARD, VOICE |
 | FollowUp | NONE, CORRECTION_REQUIRED, AWAIT_EXTERNAL |
 
 UNKNOWN is valid before document-role determination. Email category and classified_by are null before classification, including a failure before classification. They must be non-null once a machine assessment exists. Human input does not rewrite the run's classification.
@@ -198,7 +198,7 @@ export type ValueOrigin = "DOCUMENT_EXTRACTED" | "DOCUMENT_CONFIRMED" | "MANUAL_
 export type ValueSource = "DOCUMENT_CONFIRMED" | "MANUAL_OVERRIDE";
 export type Side = "SI" | "BL";
 export type RunKind = "EVAL" | "DEMO";
-export type Channel = "TELEGRAM" | "DASHBOARD";
+export type Channel = "TELEGRAM" | "DASHBOARD" | "VOICE";
 export type DocumentRole = "UNKNOWN" | "SI" | "BL" | "OTHER";
 export type FollowUp = "NONE" | "CORRECTION_REQUIRED" | "AWAIT_EXTERNAL";
 export type ReviewUiMode = "CHOICE" | "VALUE_INPUT" | "ACKNOWLEDGE";
@@ -323,7 +323,7 @@ export interface RunRef {
   demo_safe: boolean;
 }
 export interface Case {
-  schema_version: "2.1.1";
+  schema_version: "2.1.2";
   case_id: string; // email_id within the authenticated EVAL or DEMO namespace
   run: RunRef;
   email: {
@@ -369,7 +369,7 @@ interface DecisionBase {
   review_id: string;
   run_id: string;
   channel: Channel;
-  actor_id: string; // trusted proxy/bot assertion, verified against authenticated identity
+  actor_id: string; // trusted interaction-service assertion, verified against authenticated identity
   user_message?: string;
 }
 export type DecisionRequest =
@@ -427,11 +427,21 @@ A future source that provides a trustworthy receipt timestamp may populate recei
 
 Never relabel these system timestamps as email receipt time. No additional ingestion timestamp is required for this amendment. Synthetic fixtures may contain explicitly fictional receipt times or null, but participant-derived cases must preserve source absence.
 
-### 7.2 Coordinated v2.1.1 adoption
+### 7.2 Historical v2.1.1 receipt-time adoption
+
+The following records the earlier migration. For the current target version, use §7.3; retained v2.1.1 references in companion implementation plans describe the pre-voice baseline and do not override §7.3.
 
 Update the shared types, runtime validator, mapper, simulator responses, dashboard, and fixtures together to schema_version="2.1.1". Known timestamps remain valid; null is newly permitted, so strict v2.1 consumers require updating. This editorial patch is not a claim of wire compatibility with an unmodified validator.
 
 Do not maintain a separate provisional simulator schema. Remove the earlier missing-receipt blocking workaround once the coordinated amendment is adopted. Keep historical run/snapshot artifacts unchanged; if a legacy case is migrated, preserve timestamp provenance and do not manufacture missing metadata.
+
+### 7.3 Coordinated v2.1.2 voice adoption
+
+VOICE is an additional interaction channel, not a source of business truth. Deploy shared types/runtime validators, authorized voice-service identity, accepted-decision channel persistence and consumers, schema_version emission, simulator and fixtures together. The target Case schema_version is "2.1.2". Older strict clients may reject the new literal or channel; this is not a promise of compatibility with unmodified v2.1.1 code. Preserve historical snapshots and provenance. Do not silently rewrite frozen EVAL artifacts.
+
+A/B/C approval and a tested backend capability are required before enabling real VOICE submissions. Until then, existing deployment paths remain on their coordinated baseline; voice experiments may perform authorized reads or log explicitly synthetic proposals. They must not send VOICE to an old validator or mislabel a call as TELEGRAM. No runtime migration is performed by this documentation revision.
+
+Voice uses the same DecisionRequest union, actions, review budgets, grounding/override rules, durable acceptance and run guards. No new business endpoint, workflow status, review mode or urgency field is introduced. Existing AcceptedDecision.channel stores VOICE after adoption; business history retains its existing event vocabulary. Provider/call metadata remains interaction-owned.
 
 ## 8. API, asynchronous work, and concurrency
 
@@ -514,11 +524,25 @@ Never apply bare typed values to whichever review happens to be open. Require re
 
 Telegram documents are fetched server-to-server with a scoped credential and uploaded using sendDocument. Never expose bearer credentials in links. Source snippets and a responsive dashboard deep link accompany the review; evidence crops remain optional.
 
+### 10.1 Voice routing, confirmation and notification boundary
+
+PRD 2 owns the shared interaction service and existing notifier. PRD 3 adds a voice adapter and attention policy through that service; it must not create an independent shipping workflow engine or a competing notifier. Voice Task Inbox classifications and call lifecycle states are interaction-owned and are not added to backend enums.
+
+Authenticate the actor before disclosing protected case information or accepting a voice action. Caller ID alone is insufficient. Use a trusted authenticated pairing/session, such as a short-lived challenge approved in the enrolled Telegram account. Validate provider callbacks and replay handling; the trial spike's unsigned capability URL is not production authentication. Assert actor_id only from the authenticated session and enforce authorized case/run/document scope server-side.
+
+Explicitly select the current review and bind a spoken proposal to actor, case, review_id, run_id, action, option_id or canonical value, and applicable field/side/unit. Read back the exact proposed action and obtain explicit confirmation before any voice mutation. Silence, ambiguity, correction, expired/disconnected sessions and unrelated yes responses cannot authorize submission. A changed proposal or run invalidates confirmation. Unsupported values/candidates still require the exact OverrideConfirmation tuple and remain ungrounded; model assertions cannot supply confirmation.
+
+Deferral leaves the review unchanged. ACKNOWLEDGE and NONE_OF_THESE are intentional contract actions with external-block semantics, not synonyms for postponement. Evidence requirements are unchanged by channel: selecting between uncertain scanned values still requires evidence inspection or an explicitly confirmed allowed override.
+
+For this rollout, notified_at retains its individual Telegram review-message delivery meaning. Phone ringing, answered calls, inbound summaries and voice attempts do not mark a review notified or suppress Telegram evidence/fallback delivery. Keep per-channel attempt/delivery records in the interaction service. A broader channel-neutral notified meaning requires a later coordinated semantic revision.
+
+Keep call/proposal/replay/submission records durable. On restart or lost response, reconcile backend state before retry; do not replay an old voice proposal against a new review. 202 means accepted and resuming, not completed. Backend commit-time concurrency guards remain authoritative across all three channels.
+
 ## 11. EVAL isolation and frozen submission snapshots
 
 Public dashboard credentials and the bot can access only explicitly authorized demo-safe cases/runs/documents across list, detail, review, decision, stats, content, create, and reprocess routes. A DEMO label alone does not authorize organizer documents. Enforce this server-side even when a proxy holds a token.
 
-Keep EVAL credentials and routes private. Telegram actors are authenticated/allowlisted; dashboard actors use trusted sessions or an explicit demo guest identity restricted to safe fixtures. actor_id is never trusted merely because it appears in browser JSON.
+Keep EVAL credentials and routes private. Voice actors use authenticated scoped sessions under §10.1; Telegram actors are authenticated/allowlisted; dashboard actors use trusted sessions or an explicit demo guest identity restricted to safe fixtures. actor_id is never trusted merely because it appears in browser JSON.
 
 A submission snapshot is a pure export of successfully finalized automated EVAL assessments, independent of workflow_status. A valid frozen NEEDS_REVIEW assessment is exportable while AWAITING_HUMAN or BLOCKED_EXTERNAL, and remains valid after a later human-resumption failure.
 
@@ -589,7 +613,19 @@ Required end-to-end checks:
 
 | AC-17 | Map a participant record with no receipt timestamp to a valid Case with received_at=null; no ingestion block, guessed time, business review, or export exclusion |
 | AC-18 | Dashboard renders known and unknown receipt times without invalid dates; created_at/updated_at remain accurately labelled system activity |
-| AC-19 | Reprocessing preserves Case.created_at and unknown received_at, advances run.started_at, and emits schema_version=2.1.1; validator rejects an omitted received_at or malformed non-null timestamp |
+| AC-19 | Reprocessing preserves Case.created_at and unknown received_at, advances run.started_at, and emits schema_version=2.1.2 after coordinated adoption; validator rejects an omitted received_at or malformed non-null timestamp |
+
+### Voice extension acceptance gate
+
+AC-20–AC-24 gate activation of PRD 3 real decisions, not completion of the existing Telegram/dashboard MVP while voice is disabled.
+
+| ID | Scenario and expected result |
+|---|---|
+| AC-20 | Authenticated VOICE action uses the same validator, returns durable 202, persists channel=VOICE and resumes processing without changing machine_assessment |
+| AC-21 | Voice races Telegram/dashboard or receives repeated callbacks: one durable acceptance; duplicates/stale submissions do not create new work or apply to a new review |
+| AC-22 | Missing/expired identity, spoofed caller ID, invalid provider callback or guessed private object is denied without disclosure or decision |
+| AC-23 | Silence, negation, changed value/run and unbound yes do not submit; unsupported value requires exact override confirmation and retains ungrounded provenance |
+| AC-24 | Call failure/restart/timeout preserves or reconciles accepted work, leaves unconfirmed reviews pending and retains Telegram fallback; voice does not mutate notified_at |
 
 ## 14. Organizer verification and release gates
 
@@ -620,6 +656,10 @@ The PRDs now put minimum grounding and one real AI path in the MUST core, manual
 
 Allow unknown source receipt time explicitly; define existing system timestamps; align mapper, frontend, simulator, validators, and acceptance cases; incorporate directly observed participant structure; distinguish optional organizer self-evaluation from project validation commitments. Preserve Hermes as the PRD 2 implementation choice and all existing decision, privacy, and export safeguards.
 
+### v2.1.2 amendment
+
+Add VOICE channel and scoped voice actor assertions; preserve existing business types, actions, grounding, budgets and execution. Define shared routing/confirmation and unchanged Telegram notification semantics. Add coordinated schema migration and optional-extension acceptance gates. PRD 3 owns voice implementation; PRD 2 owns shared interaction integration. Pending team adoption does not block the existing deployed MVP.
+
 ## Appendix A. Payload examples
 
 ### Complete initial Case returned by a new create request
@@ -628,7 +668,7 @@ This is a full valid processing-state synthetic fixture with unknown receipt tim
 
 ~~~json
 {
-  "schema_version": "2.1.1",
+  "schema_version": "2.1.2",
   "case_id": "demo_email_001",
   "run": {
     "run_id": "demo_run_001",
