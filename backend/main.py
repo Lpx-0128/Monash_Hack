@@ -198,13 +198,8 @@ def reprocess_case(case_id: str, db: Session = Depends(get_db)):
         )
     )
 
-    # Cancel stale PENDING/RUNNING jobs for this case before creating the new one,
-    # so the old worker cannot run against the new run.
-    crud.cancel_pending_jobs_for_case(db, case_id)
-
-    crud.update_case(db, db_case, schema_case)
-    crud.create_job(db, schema_case.case_id, schema_case.run.run_id, "PROCESS_CASE")
-    return schema_case
+    # One atomic commit: supersede stale jobs + rewrite case + insert new PROCESS_CASE job
+    return crud.reprocess_case_atomic(db, db_case, schema_case)
 
 
 @api_router.get("/reviews", response_model=List[schemas.ReviewListItem])
@@ -277,7 +272,8 @@ def submit_decision(review_id: str, req: schemas.DecisionRequest, db: Session = 
 
             schema_case.workflow_status = schemas.WorkflowStatus.PROCESSING
 
-            # Contract event names: DECISION_RECEIVED on intake, DECISION_QUEUED once enqueued
+            # DECISION_RECEIVED is emitted here (human intake).
+            # DECISION_APPLIED will be emitted by the worker when it actually applies the decision.
             schema_case.history.append(
                 schemas.HistoryEvent(
                     event_id=f"evt_{uuid.uuid4().hex[:8]}",
@@ -288,20 +284,11 @@ def submit_decision(review_id: str, req: schemas.DecisionRequest, db: Session = 
                     summary=f"Decision {req.action.value} received"
                 )
             )
-            schema_case.history.append(
-                schemas.HistoryEvent(
-                    event_id=f"evt_{uuid.uuid4().hex[:8]}",
-                    run_id=schema_case.run.run_id,
-                    at=now,
-                    type="DECISION_QUEUED",
-                    actor=schemas.Actor(kind="SYSTEM", id=None),
-                    summary="Decision queued for application by worker"
-                )
-            )
 
             # Case update and job insert in one transaction
             crud.update_case_and_create_job(db, c, schema_case, "APPLY_DECISION")
             return schema_case
+
 
     raise HTTPException(status_code=404, detail="REVIEW_NOT_FOUND")
 

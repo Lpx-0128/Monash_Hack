@@ -263,21 +263,58 @@ def update_case_and_create_job(db: Session, db_case: models.CaseModel, case: sch
     db.refresh(db_case)
 
 
-def cancel_pending_jobs_for_case(db: Session, case_id: str):
-    """Mark all PENDING/RUNNING jobs for a case as SUPERSEDED before reprocessing.
+def reprocess_case_atomic(db: Session, db_case: models.CaseModel, schema_case: schemas.Case) -> schemas.Case:
+    """Supersede stale jobs, rewrite the case, and insert the new PROCESS_CASE job — all in one commit.
 
-    Ensures the old worker cannot run against the new run.
+    Prevents the crash window where the case is rewritten to a new run but no
+    job ever picks it up (same class of bug as the create / decision windows).
     """
     from sqlalchemy import text as sa_text
     now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    new_job_id = f"job_{uuid.uuid4().hex[:8]}"
+
+    # Step 1: supersede any PENDING or RUNNING jobs for this case
     db.execute(
         sa_text(
             "UPDATE jobs SET status='SUPERSEDED', updated_at=:now "
             "WHERE case_id=:case_id AND status IN ('PENDING','RUNNING')"
         ),
-        {"now": now, "case_id": case_id}
+        {"now": now, "case_id": db_case.case_id}
     )
-    db.commit()
+
+    # Step 2: apply case mutations
+    case_data = schema_case.model_dump(mode='json', by_alias=True)
+    db_case.workflow_status = case_data["workflow_status"]
+    db_case.machine_assessment = case_data.get("machine_assessment")
+    db_case.resolution = case_data.get("resolution")
+    db_case.follow_up = case_data.get("follow_up")
+    db_case.updated_at = case_data["updated_at"]
+    db_case.completed_at = case_data.get("completed_at")
+    db_case.run = case_data["run"]
+    db_case.email = case_data["email"]
+    db_case.documents = case_data.get("documents", [])
+    db_case.fields_data = case_data.get("fields", [])
+    db_case.review = case_data.get("review")
+    db_case.failure = case_data.get("failure")
+    db_case.history = case_data.get("history", [])
+    db_case.metrics = case_data["metrics"]
+
+    # Step 3: insert the new PROCESS_CASE job
+    db_job = models.JobModel(
+        job_id=new_job_id,
+        case_id=db_case.case_id,
+        run_id=schema_case.run.run_id,
+        action="PROCESS_CASE",
+        status="PENDING",
+        attempts=[],
+        created_at=now,
+        updated_at=now,
+    )
+    db.add(db_job)
+
+    db.commit()  # single commit — all three or none
+    db.refresh(db_case)
+    return map_db_to_schema(db_case)
 
 
 def map_db_to_schema(db_case: models.CaseModel) -> schemas.Case:

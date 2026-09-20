@@ -1,67 +1,86 @@
 import json
-from fastapi.testclient import TestClient
-from backend.main import app
-from backend.schemas import Case
 import os
 import time
 import uuid
 
-# Remove test database if it exists to start fresh
-if os.path.exists("shipping.db"):
-    try:
-        os.remove("shipping.db")
-    except Exception as e:
-        print(f"Could not remove db: {e}")
+from fastapi.testclient import TestClient
+from backend.main import app
+from backend.schemas import Case
 
-# use_lifespan=True starts the worker loop (and crash recovery) as it runs in production
+# TestClient with use_lifespan=True starts the worker loop exactly as production does
 client = TestClient(app, raise_server_exceptions=True)
 
-demo_email_payload = {
-    "email_id": f"test_email_{uuid.uuid4().hex[:6]}"
-}
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+def poll_case(case_id: str, expected_status: str, timeout: int = 15) -> dict:
+    """Poll GET /api/v1/cases/{case_id} until workflow_status matches or timeout."""
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        resp = client.get(f"/api/v1/cases/{case_id}")
+        if resp.status_code == 200:
+            data = resp.json()
+            if data["workflow_status"] == expected_status:
+                return data
+        time.sleep(0.3)
+    resp = client.get(f"/api/v1/cases/{case_id}")
+    raise AssertionError(
+        f"Timed out waiting for {expected_status}. "
+        f"Last status: {resp.json().get('workflow_status')} — {resp.text[:200]}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Test runner
+# ---------------------------------------------------------------------------
 
 if __name__ == "__main__":
-    print("=== Testing GET /health (root, no prefix) ===")
-    health_resp = client.get("/health")
-    assert health_resp.status_code == 200, f"Expected 200, got {health_resp.status_code}: {health_resp.text}"
-    print(f"Health: {health_resp.json()}")
+    # Clean slate — must be inside __main__ so the import doesn't race the DB
+    if os.path.exists("shipping.db"):
+        try:
+            os.remove("shipping.db")
+        except Exception as e:
+            print(f"Could not remove db: {e}")
 
-    print("\n=== Testing GET /ready (root, no prefix) ===")
-    ready_resp = client.get("/ready")
-    assert ready_resp.status_code == 200, f"Expected 200, got {ready_resp.status_code}: {ready_resp.text}"
-    print(f"Ready: {ready_resp.json()}")
+    demo_email_payload = {"email_id": f"test_email_{uuid.uuid4().hex[:6]}"}
 
-    print("\n=== Testing POST /api/v1/cases ===")
-    response = client.post("/api/v1/cases", json=demo_email_payload)
-    print(f"Status Code: {response.status_code}")
-    assert response.status_code == 202, f"Expected 202, got {response.status_code}: {response.text}"
+    # ── Health / ready (root paths, no /api/v1 prefix) ────────────────────
+    print("=== GET /health ===")
+    r = client.get("/health")
+    assert r.status_code == 200, r.text
+    print(f"  {r.json()}")
 
-    case_data = response.json()
-    case_id = case_data["case_id"]
-    print(f"Created Case ID: {case_id} with status {case_data['workflow_status']}")
+    print("=== GET /ready ===")
+    r = client.get("/ready")
+    assert r.status_code == 200, r.text
+    print(f"  {r.json()}")
 
-    print("\nWaiting 4 seconds for worker to process...")
-    time.sleep(4)
+    # ── Create case ───────────────────────────────────────────────────────
+    print("\n=== POST /api/v1/cases ===")
+    r = client.post("/api/v1/cases", json=demo_email_payload)
+    assert r.status_code == 202, f"Expected 202, got {r.status_code}: {r.text}"
+    case_id = r.json()["case_id"]
+    print(f"  Created {case_id}")
 
-    print("=== Testing GET /api/v1/cases/{case_id} ===")
-    response = client.get(f"/api/v1/cases/{case_id}")
-    assert response.status_code == 200, f"Expected 200, got {response.status_code}: {response.text}"
-    data = response.json()
-    print(f"Workflow status: {data['workflow_status']}")
-    print(f"Machine status: {data['machine_assessment']['status']}")
+    # ── Wait for worker to produce a review ───────────────────────────────
+    print("  Polling for AWAITING_HUMAN...")
+    data = poll_case(case_id, "AWAITING_HUMAN", timeout=15)
+    print(f"  Machine status: {data['machine_assessment']['status']}")
 
-    print("\n=== Testing GET /api/v1/reviews ===")
-    review_response = client.get("/api/v1/reviews")
-    assert review_response.status_code == 200
-    reviews = review_response.json()
-    print(f"Total open reviews: {len(reviews)}")
+    # ── List reviews ──────────────────────────────────────────────────────
+    print("\n=== GET /api/v1/reviews ===")
+    r = client.get("/api/v1/reviews")
+    assert r.status_code == 200
+    reviews = r.json()
     assert len(reviews) == 1, f"Expected 1 open review, got {len(reviews)}"
+    review_id = reviews[0]["review"]["review_id"]
+    run_id = reviews[0]["review"]["run_id"]
+    print(f"  review_id={review_id}, run_id={run_id}")
 
-    review_item = reviews[0]
-    review_id = review_item["review"]["review_id"]
-    run_id = review_item["review"]["run_id"]
-
-    print(f"\n=== Testing POST /api/v1/reviews/{review_id}/decision ===")
+    # ── Submit decision ───────────────────────────────────────────────────
+    print(f"\n=== POST /api/v1/reviews/{review_id}/decision ===")
     decision_payload = {
         "review_id": review_id,
         "run_id": run_id,
@@ -70,62 +89,77 @@ if __name__ == "__main__":
         "action": "PROVIDE_VALUE",
         "field": "gross_weight_kg",
         "side": "BL",
-        "value": "15000"
+        "value": "15000",
     }
-    decision_resp = client.post(f"/api/v1/reviews/{review_id}/decision", json=decision_payload)
-    print(f"Decision Status Code: {decision_resp.status_code}")
-    assert decision_resp.status_code == 202, f"Expected 202, got {decision_resp.status_code}: {decision_resp.text}"
+    r = client.post(f"/api/v1/reviews/{review_id}/decision", json=decision_payload)
+    assert r.status_code == 202, f"Expected 202, got {r.status_code}: {r.text}"
+    print("  Accepted")
 
-    print("\nWaiting 4 seconds for apply_decision to complete...")
-    time.sleep(4)
+    # ── Wait for COMPLETED ────────────────────────────────────────────────
+    print("  Polling for COMPLETED...")
+    final = poll_case(case_id, "COMPLETED", timeout=15)
+    assert final["review"]["status"] == "CLOSED", f"Review should be CLOSED, got {final['review']['status']}"
+    print(f"  Final status: {final['workflow_status']}, review: {final['review']['status']}")
 
-    final_case_resp = client.get(f"/api/v1/cases/{case_id}")
-    final_case = final_case_resp.json()
-    print(f"Final workflow status: {final_case['workflow_status']}")
-    print(f"Final review status: {final_case['review']['status']}")
-    assert final_case['workflow_status'] == 'COMPLETED', f"Expected COMPLETED, got {final_case['workflow_status']}"
-    assert final_case['review']['status'] == 'CLOSED', f"Expected CLOSED, got {final_case['review']['status']}"
+    # Check DECISION_RECEIVED and DECISION_APPLIED are in history
+    event_types = [e["type"] for e in final["history"]]
+    assert "DECISION_RECEIVED" in event_types, f"Missing DECISION_RECEIVED in {event_types}"
+    assert "DECISION_APPLIED" in event_types, f"Missing DECISION_APPLIED in {event_types}"
+    print(f"  History events: {event_types}")
 
-    print("\n=== Testing duplicate decision (should 409) ===")
-    dup_decision = client.post(f"/api/v1/reviews/{review_id}/decision", json=decision_payload)
-    print(f"Duplicate decision Status Code: {dup_decision.status_code} (Expected 409)")
-    assert dup_decision.status_code == 409
+    # ── Duplicate decision (should 409) ───────────────────────────────────
+    print("\n=== Duplicate decision (expect 409) ===")
+    r = client.post(f"/api/v1/reviews/{review_id}/decision", json=decision_payload)
+    assert r.status_code == 409, f"Expected 409, got {r.status_code}: {r.text}"
+    print(f"  Got {r.status_code} ✓")
 
-    print(f"\n=== Testing POST /api/v1/cases/{case_id}/reprocess ===")
-    reprocess_resp = client.post(f"/api/v1/cases/{case_id}/reprocess")
-    print(f"Reprocess Status Code: {reprocess_resp.status_code}")
-    assert reprocess_resp.status_code == 202
-    reprocess_data = reprocess_resp.json()
-    print(f"New run_id: {reprocess_data['run']['run_id']}")
-    print(f"Workflow status: {reprocess_data['workflow_status']}")
-    assert reprocess_data['workflow_status'] == 'PROCESSING'
+    # ── Reprocess ─────────────────────────────────────────────────────────
+    print(f"\n=== POST /api/v1/cases/{case_id}/reprocess ===")
+    r = client.post(f"/api/v1/cases/{case_id}/reprocess")
+    assert r.status_code == 202, f"Expected 202, got {r.status_code}: {r.text}"
+    new_run_id = r.json()["run"]["run_id"]
+    print(f"  New run_id={new_run_id}")
 
-    print("\nWaiting 4 seconds for reprocessed worker...")
-    time.sleep(4)
+    # ── Wait for reprocessed case to reach AWAITING_HUMAN again ──────────
+    print("  Polling for AWAITING_HUMAN after reprocess...")
+    data = poll_case(case_id, "AWAITING_HUMAN", timeout=15)
+    # The case's review should belong to the new run, not the old one
+    assert data["review"]["run_id"] == new_run_id, (
+        f"Review run_id mismatch: expected {new_run_id}, got {data['review']['run_id']}"
+    )
+    print(f"  Review run_id matches new run ✓")
 
-    reprocessed_case = client.get(f"/api/v1/cases/{case_id}").json()
-    print(f"Reprocessed workflow status: {reprocessed_case['workflow_status']}")
+    # ── List / filter ──────────────────────────────────────────────────────
+    print("\n=== GET /api/v1/cases?workflow_status=AWAITING_HUMAN ===")
+    r = client.get("/api/v1/cases?workflow_status=AWAITING_HUMAN")
+    assert r.status_code == 200
+    print(f"  {len(r.json())} case(s) AWAITING_HUMAN")
 
-    print("\n=== Testing GET /api/v1/cases with filters ===")
-    filtered = client.get("/api/v1/cases?workflow_status=AWAITING_HUMAN")
-    print(f"Cases AWAITING_HUMAN: {len(filtered.json())}")
+    # ── Stats ──────────────────────────────────────────────────────────────
+    print("\n=== GET /api/v1/stats ===")
+    r = client.get("/api/v1/stats")
+    assert r.status_code == 200, r.text
+    stats = r.json()
+    print(f"  total_cases={stats['total_cases']}")
+    print(f"  by_workflow={stats['by_workflow']}")
+    # All enum values should be present even if 0
+    from backend.schemas import WorkflowStatus, EmailCategory
+    for s in WorkflowStatus:
+        assert s.value in stats["by_workflow"], f"Missing {s.value} in by_workflow"
+    for c in EmailCategory:
+        assert c.value in stats["by_category"], f"Missing {c.value} in by_category"
+    print("  All enum keys present ✓")
 
-    print("\n=== Testing GET /api/v1/stats ===")
-    stats_resp = client.get("/api/v1/stats")
-    assert stats_resp.status_code == 200, f"Expected 200, got {stats_resp.status_code}: {stats_resp.text}"
-    stats = stats_resp.json()
-    print(f"Total cases: {stats['total_cases']}")
-    print(f"By workflow: {stats['by_workflow']}")
-    print(f"By category: {stats['by_category']}")
+    # ── Document placeholder ───────────────────────────────────────────────
+    print("\n=== GET /api/v1/documents/fake_id/content (expect 404) ===")
+    r = client.get("/api/v1/documents/fake_id/content")
+    assert r.status_code == 404
+    print(f"  Got 404 ✓")
 
-    print("\n=== Testing GET /api/v1/documents/fake_id/content (placeholder) ===")
-    doc_resp = client.get("/api/v1/documents/fake_id/content")
-    print(f"Document Status Code: {doc_resp.status_code} (Expected 404)")
-    assert doc_resp.status_code == 404
-
-    print("\n=== Testing duplicate POST /api/v1/cases ===")
-    dup_response = client.post("/api/v1/cases", json=demo_email_payload)
-    print(f"Duplicate Status Code: {dup_response.status_code} (Expected 200)")
-    assert dup_response.status_code == 200
+    # ── Duplicate POST /cases (expect 200) ────────────────────────────────
+    print("\n=== Duplicate POST /api/v1/cases (expect 200) ===")
+    r = client.post("/api/v1/cases", json=demo_email_payload)
+    assert r.status_code == 200, f"Expected 200, got {r.status_code}: {r.text}"
+    print(f"  Got 200 ✓")
 
     print("\n[SUCCESS] All tests passed!")
