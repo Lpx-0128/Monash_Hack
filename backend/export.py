@@ -61,13 +61,11 @@ def export_eval_cases(
         if required_ids:
             missing_required = required_ids - set(submission.keys())
             if missing_required:
-                sys.stderr.write(f"FAIL CLOSED: {len(missing_required)} required email IDs missing from export: {sorted(missing_required)[:10]}\n")
-                sys.exit(1)
+                raise RuntimeError(f"FAIL CLOSED: {len(missing_required)} required email IDs missing from export: {sorted(missing_required)[:10]}")
 
         # Check for missing assessments in existing cases
         if missing_assessments:
-            sys.stderr.write(f"FAIL CLOSED: {len(missing_assessments)} cases lack finalized machine assessment: {missing_assessments[:10]}\n")
-            sys.exit(1)
+            raise RuntimeError(f"FAIL CLOSED: {len(missing_assessments)} cases lack finalized machine assessment: {missing_assessments[:10]}")
 
         # Write formatted submission JSON
         out_path = Path(output_path)
@@ -109,9 +107,13 @@ if __name__ == "__main__":
     parser.add_argument("--run-kind", type=str, default="EVAL", choices=["DEMO", "EVAL"])
     args = parser.parse_args()
 
-    export_eval_cases(
-        output_path=args.output,
-        manifest_path=args.manifest,
-        required_ids_file=args.required_ids,
-        run_kind=args.run_kind
-    )
+    try:
+        export_eval_cases(
+            output_path=args.output,
+            manifest_path=args.manifest,
+            required_ids_file=args.required_ids,
+            run_kind=args.run_kind
+        )
+    except RuntimeError as e:
+        sys.stderr.write(f"{e}\n")
+        sys.exit(1)

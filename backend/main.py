@@ -155,8 +155,8 @@ def create_case(
     if db_case:
         existing = crud.map_db_to_schema(db_case)
         if existing.run.kind == schemas.RunKind.EVAL and run_kind != schemas.RunKind.EVAL:
-            # Conceal existence of EVAL case from public scope
-            pass
+            # Conceal existence of EVAL case from public scope per AC-07
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=schemas.ErrorCode.NOT_FOUND.value)
         else:
             response.status_code = status.HTTP_200_OK
             return existing
@@ -182,6 +182,10 @@ def batch_create_cases(
             continue
         db_case = crud.get_case(db, case_id=email_id)
         if db_case:
+            existing = crud.map_db_to_schema(db_case)
+            if existing.run.kind == schemas.RunKind.EVAL and run_kind != schemas.RunKind.EVAL:
+                # Conceal existence of EVAL case from public callers per AC-07
+                continue
             existing_count += 1
             case_ids.append(email_id)
         else:

@@ -203,6 +203,11 @@ def test_security_eval_isolation(client):
     r_reproc = client.post(f"/api/v1/cases/{eval_email_id}/reprocess")
     assert r_reproc.status_code == 404
 
+    # Public user trying to create/post an existing EVAL case gets 404 (conceals existence per AC-07)
+    r_create = client.post("/api/v1/cases", json={"email_id": eval_email_id})
+    assert r_create.status_code == 404
+    assert r_create.json()["error"]["code"] == "NOT_FOUND"
+
 
 def test_stats_metrics(client):
     r = client.get("/api/v1/stats")
