@@ -1,50 +1,98 @@
-from fastapi import FastAPI, Depends, HTTPException, BackgroundTasks, status, Response, Request, APIRouter
-from fastapi.responses import FileResponse, JSONResponse
+from contextlib import asynccontextmanager
+from fastapi import FastAPI, Depends, HTTPException, status, Response, Request, APIRouter
+from fastapi.responses import JSONResponse
 from fastapi.exceptions import RequestValidationError
 from sqlalchemy.orm import Session
+from sqlalchemy import text
 from typing import List, Optional
 from datetime import datetime, timezone
 import uuid
 from . import schemas, models, crud, worker
-from .database import engine, get_db
+from .database import engine, get_db, SessionLocal
 
 # Create the database tables
 models.Base.metadata.create_all(bind=engine)
 
-app = FastAPI(title="Shipping Document Verification API", version="2.1.1")
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Start the worker loop once on startup — never as an import side effect."""
+    from .worker_loop import start_worker_thread
+    start_worker_thread()
+    yield
+
+
+app = FastAPI(title="Shipping Document Verification API", version="2.1.1", lifespan=lifespan)
+
+# ---------------------------------------------------------------------------
+# Error response envelope — contract §7
+# Maps HTTP exceptions to {error: {code, message}} with proper contract codes.
+# ---------------------------------------------------------------------------
+
+_HTTP_TO_CODE = {
+    400: "BAD_REQUEST",
+    404: "NOT_FOUND",
+    409: "CONFLICT",
+    422: "UNPROCESSABLE",
+    500: "INTERNAL_ERROR",
+    503: "SERVICE_UNAVAILABLE",
+}
+
 
 @app.exception_handler(HTTPException)
 async def http_exception_handler(request: Request, exc: HTTPException):
-    # Contract error envelope
+    # If the caller already set detail to a known contract code (e.g. STALE_RUN,
+    # REVIEW_ALREADY_CLOSED) keep it; otherwise derive from the status code.
+    detail = exc.detail or ""
+    known_contract_codes = {
+        "STALE_RUN", "REVIEW_ALREADY_CLOSED", "CASE_NOT_FOUND", "REVIEW_NOT_FOUND",
+        "NOT_FOUND", "BAD_REQUEST", "CONFLICT", "INTERNAL_ERROR",
+    }
+    if detail in known_contract_codes:
+        code = detail
+        message = detail.replace("_", " ").title()
+    else:
+        code = _HTTP_TO_CODE.get(exc.status_code, "ERROR")
+        message = detail if detail else code
     return JSONResponse(
         status_code=exc.status_code,
-        content={"error": {"code": exc.detail, "message": getattr(exc, "message", exc.detail)}}
+        content={"error": {"code": code, "message": message}}
     )
+
 
 @app.exception_handler(RequestValidationError)
 async def validation_exception_handler(request: Request, exc: RequestValidationError):
     return JSONResponse(
         status_code=422,
-        content={"error": {"code": "VALIDATION_ERROR", "message": str(exc)}}
+        content={"error": {"code": "UNPROCESSABLE", "message": str(exc)}}
     )
+
+
+# ---------------------------------------------------------------------------
+# Router — all routes live under /api/v1
+# ---------------------------------------------------------------------------
 
 api_router = APIRouter(prefix="/api/v1")
 
-@app.get("/health")
+
+@api_router.get("/health")
 def health_check():
     return {"status": "OK", "version": "2.1.1"}
 
-@app.get("/ready")
-def readiness_check():
-    return {"status": "READY"}
-def health_check():
-    return {"status": "OK", "version": "2.1.1"}
 
-@app.get("/ready")
+@api_router.get("/ready")
 def readiness_check():
-    return {"status": "READY"}
+    db = SessionLocal()
+    try:
+        db.execute(text("SELECT 1"))
+        return {"status": "READY"}
+    except Exception:
+        raise HTTPException(status_code=503, detail="SERVICE_UNAVAILABLE")
+    finally:
+        db.close()
 
-@app.get("/cases", response_model=List[schemas.CaseSummary])
+
+@api_router.get("/cases", response_model=List[schemas.CaseSummary])
 def list_cases(
     workflow_status: Optional[schemas.WorkflowStatus] = None,
     category: Optional[schemas.EmailCategory] = None,
@@ -55,10 +103,10 @@ def list_cases(
     limit: int = 100,
     db: Session = Depends(get_db)
 ):
-    cases = crud.get_cases(db, skip=skip, limit=limit)
-    summaries = [crud.map_case_to_summary(crud.map_db_to_schema(c)) for c in cases]
-    
-    # Apply filters
+    # Fetch all, filter in Python before slicing (DB-level filter is future work)
+    all_cases = crud.get_cases(db, skip=0, limit=10_000)
+    summaries = [crud.map_case_to_summary(crud.map_db_to_schema(c)) for c in all_cases]
+
     if workflow_status:
         summaries = [s for s in summaries if s.workflow_status == workflow_status]
     if category:
@@ -69,46 +117,40 @@ def list_cases(
         summaries = [s for s in summaries if s.has_open_review == has_open_review]
     if run_kind:
         summaries = [s for s in summaries if s.run_kind == run_kind]
-    
-    return summaries
 
-@app.post("/cases", response_model=schemas.Case, status_code=status.HTTP_202_ACCEPTED)
-def create_case(req: schemas.CreateCaseRequest, background_tasks: BackgroundTasks, response: Response, db: Session = Depends(get_db)):
+    return summaries[skip: skip + limit]
+
+
+@api_router.post("/cases", response_model=schemas.Case, status_code=status.HTTP_202_ACCEPTED)
+def create_case(req: schemas.CreateCaseRequest, response: Response, db: Session = Depends(get_db)):
     db_case = crud.get_case(db, case_id=req.email_id)
     if db_case:
-        # Contract §8: duplicate POST /cases for existing DEMO case should return 200 with current case
         response.status_code = status.HTTP_200_OK
         return crud.map_db_to_schema(db_case)
-    
-    # Create the case in PROCESSING state
+
     case = crud.create_initial_case(db, req.email_id)
-    
-    # Create durable job
-    job = crud.create_job(db, case.case_id, case.run.run_id, "PROCESS_CASE")
-    
-    # Trigger the background worker
-    background_tasks.add_task(worker.process_case, case.case_id, job.job_id)
-    
+    crud.create_job(db, case.case_id, case.run.run_id, "PROCESS_CASE")
     return case
 
-@app.get("/cases/{case_id}", response_model=schemas.Case)
+
+@api_router.get("/cases/{case_id}", response_model=schemas.Case)
 def read_case(case_id: str, db: Session = Depends(get_db)):
     db_case = crud.get_case(db, case_id=case_id)
     if db_case is None:
-        raise HTTPException(status_code=404, detail="Case not found")
+        raise HTTPException(status_code=404, detail="CASE_NOT_FOUND")
     return crud.map_db_to_schema(db_case)
 
-@app.post("/cases/{case_id}/reprocess", response_model=schemas.Case, status_code=status.HTTP_202_ACCEPTED)
-def reprocess_case(case_id: str, background_tasks: BackgroundTasks, db: Session = Depends(get_db)):
+
+@api_router.post("/cases/{case_id}/reprocess", response_model=schemas.Case, status_code=status.HTTP_202_ACCEPTED)
+def reprocess_case(case_id: str, db: Session = Depends(get_db)):
     db_case = crud.get_case(db, case_id=case_id)
     if db_case is None:
-        raise HTTPException(status_code=404, detail="Case not found")
-    
+        raise HTTPException(status_code=404, detail="CASE_NOT_FOUND")
+
     schema_case = crud.map_db_to_schema(db_case)
     now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     new_run_id = f"run_{uuid.uuid4().hex[:8]}"
-    
-    # Supersede old OPEN review if any
+
     if schema_case.review and schema_case.review.status == schemas.ReviewStatus.OPEN:
         schema_case.review.status = schemas.ReviewStatus.CLOSED
         schema_case.review.closed_at = now
@@ -123,8 +165,7 @@ def reprocess_case(case_id: str, background_tasks: BackgroundTasks, db: Session 
                 summary="Review superseded by reprocess"
             )
         )
-    
-    # Create new run
+
     schema_case.run = schemas.Run(
         run_id=new_run_id,
         kind=schemas.RunKind.DEMO,
@@ -141,7 +182,7 @@ def reprocess_case(case_id: str, background_tasks: BackgroundTasks, db: Session 
     schema_case.failure = None
     schema_case.completed_at = None
     schema_case.updated_at = now
-    
+
     schema_case.history.append(
         schemas.HistoryEvent(
             event_id=f"evt_{uuid.uuid4().hex[:8]}",
@@ -152,35 +193,34 @@ def reprocess_case(case_id: str, background_tasks: BackgroundTasks, db: Session 
             summary="Case reprocessed with new run"
         )
     )
-    
+
     crud.update_case(db, db_case, schema_case)
-    
-    # Create durable job
-    job = crud.create_job(db, schema_case.case_id, schema_case.run.run_id, "PROCESS_CASE")
-    
-    # Trigger the background worker
-    background_tasks.add_task(worker.process_case, case_id, job.job_id)
-    
+    crud.create_job(db, schema_case.case_id, schema_case.run.run_id, "PROCESS_CASE")
     return schema_case
 
-@app.get("/reviews", response_model=List[schemas.ReviewListItem])
+
+@api_router.get("/reviews", response_model=List[schemas.ReviewListItem])
 def list_reviews(run_kind: Optional[schemas.RunKind] = None, db: Session = Depends(get_db)):
     return crud.get_reviews(db, run_kind=run_kind)
 
-@app.post("/reviews/{review_id}/notified", response_model=schemas.Review)
+
+@api_router.post("/reviews/{review_id}/notified", response_model=schemas.Review)
 def review_notified(review_id: str, req: schemas.NotifiedRequest, db: Session = Depends(get_db)):
     cases = crud.get_cases(db)
     for c in cases:
         schema_case = crud.map_db_to_schema(c)
         if schema_case.review and schema_case.review.review_id == review_id:
+            # Idempotent: if already notified, return current review without error
+            if schema_case.review.notified_at is not None:
+                return schema_case.review
             if schema_case.review.status != schemas.ReviewStatus.OPEN:
                 raise HTTPException(status_code=409, detail="REVIEW_ALREADY_CLOSED")
             if schema_case.run.run_id != req.run_id:
                 raise HTTPException(status_code=409, detail="STALE_RUN")
-            
+
             now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
             schema_case.review.notified_at = now
-            
+
             schema_case.history.append(
                 schemas.HistoryEvent(
                     event_id=f"evt_{uuid.uuid4().hex[:8]}",
@@ -193,11 +233,12 @@ def review_notified(review_id: str, req: schemas.NotifiedRequest, db: Session = 
             )
             crud.update_case(db, c, schema_case)
             return schema_case.review
-    
-    raise HTTPException(status_code=404, detail="Review not found")
 
-@app.post("/reviews/{review_id}/decision", status_code=status.HTTP_202_ACCEPTED)
-def submit_decision(review_id: str, req: schemas.DecisionRequest, background_tasks: BackgroundTasks, db: Session = Depends(get_db)):
+    raise HTTPException(status_code=404, detail="REVIEW_NOT_FOUND")
+
+
+@api_router.post("/reviews/{review_id}/decision", status_code=status.HTTP_202_ACCEPTED)
+def submit_decision(review_id: str, req: schemas.DecisionRequest, db: Session = Depends(get_db)):
     cases = crud.get_cases(db)
     for c in cases:
         schema_case = crud.map_db_to_schema(c)
@@ -206,15 +247,15 @@ def submit_decision(review_id: str, req: schemas.DecisionRequest, background_tas
                 raise HTTPException(status_code=409, detail="REVIEW_ALREADY_CLOSED")
             if schema_case.run.run_id != req.run_id:
                 raise HTTPException(status_code=409, detail="STALE_RUN")
-            
+
             now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-            
+
             # Close the review
             schema_case.review.status = schemas.ReviewStatus.CLOSED
             schema_case.review.closed_at = now
             schema_case.review.close_reason = "DECISION_ACCEPTED"
-            
-            # Save resolution
+
+            # Save resolution (final_status left as None; worker sets it after applying)
             schema_case.resolution = schemas.Resolution(
                 review_id=review_id,
                 run_id=schema_case.run.run_id,
@@ -224,47 +265,59 @@ def submit_decision(review_id: str, req: schemas.DecisionRequest, background_tas
                 channel=req.channel,
                 user_message=req.user_message,
                 resolved_at=now,
-                final_status=schemas.MachineStatus.NEEDS_REVIEW, # placeholder until worker recomputes
+                final_status=schemas.MachineStatus.NEEDS_REVIEW,  # placeholder until worker recomputes
                 final_defect_fields=[]
             )
-            
+
             schema_case.workflow_status = schemas.WorkflowStatus.PROCESSING
+
+            # Correct contract event names
             schema_case.history.append(
                 schemas.HistoryEvent(
                     event_id=f"evt_{uuid.uuid4().hex[:8]}",
                     run_id=schema_case.run.run_id,
                     at=now,
-                    type="DECISION_ACCEPTED",
+                    type="DECISION_RECEIVED",
                     actor=schemas.Actor(kind="HUMAN", id=req.actor_id),
-                    summary=f"Decision {req.action.value} accepted"
+                    summary=f"Decision {req.action.value} received"
                 )
             )
-            crud.update_case(db, c, schema_case)
-            
-            # Create durable job
-            job = crud.create_job(db, schema_case.case_id, schema_case.run.run_id, "APPLY_DECISION")
-            
-            # Recompute and resume processing
-            background_tasks.add_task(worker.apply_decision, schema_case.case_id, job.job_id)
-            
-            return schema_case
-    
-    raise HTTPException(status_code=404, detail="Review not found")
+            schema_case.history.append(
+                schemas.HistoryEvent(
+                    event_id=f"evt_{uuid.uuid4().hex[:8]}",
+                    run_id=schema_case.run.run_id,
+                    at=now,
+                    type="DECISION_APPLIED",
+                    actor=schemas.Actor(kind="SYSTEM", id=None),
+                    summary=f"Decision queued for application"
+                )
+            )
 
-@app.get("/documents/{document_id}/content")
+            crud.update_case(db, c, schema_case)
+            crud.create_job(db, schema_case.case_id, schema_case.run.run_id, "APPLY_DECISION")
+            return schema_case
+
+    raise HTTPException(status_code=404, detail="REVIEW_NOT_FOUND")
+
+
+@api_router.get("/documents/{document_id}/content")
 def get_document_content(document_id: str, db: Session = Depends(get_db)):
     # Placeholder — Person A will implement actual document storage/retrieval
-    raise HTTPException(status_code=404, detail="Document not found")
+    raise HTTPException(status_code=404, detail="NOT_FOUND")
 
-@app.get("/stats", response_model=schemas.Stats)
+
+@api_router.get("/stats", response_model=schemas.Stats)
 def get_stats(run_kind: schemas.RunKind = schemas.RunKind.DEMO, db: Session = Depends(get_db)):
     now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-    cases = crud.get_cases(db)
-    
-    by_category = {}
-    by_machine_status = {}
-    by_effective_status = {}
-    by_workflow = {}
+    cases = crud.get_cases(db, skip=0, limit=10_000)
+
+    # Pre-populate all enum keys with 0 so the frontend always sees every key
+    by_category = {e.value: 0 for e in schemas.EmailCategory}
+    by_machine_status = {e.value: 0 for e in schemas.MachineStatus}
+    by_effective_status = {e.value: 0 for e in schemas.MachineStatus}
+    by_workflow = {e.value: 0 for e in schemas.WorkflowStatus}
+
+    total_filtered = 0
     unclassified = 0
     awaiting_human_now = 0
     auto_completed = 0
@@ -275,34 +328,29 @@ def get_stats(run_kind: schemas.RunKind = schemas.RunKind.DEMO, db: Session = De
     bl_ok = 0
     bl_mismatch = 0
     bl_needs_review = 0
-    
+
     for c in cases:
         case = crud.map_db_to_schema(c)
-        
-        # Filter by run_kind
         if case.run.kind != run_kind:
             continue
-        
-        # Category counts
+        total_filtered += 1
+
         cat = case.email.category.value if case.email.category else None
         if cat:
             by_category[cat] = by_category.get(cat, 0) + 1
         else:
             unclassified += 1
-        
-        # Workflow counts
+
         wf = case.workflow_status.value
         by_workflow[wf] = by_workflow.get(wf, 0) + 1
-        
+
         if case.workflow_status == schemas.WorkflowStatus.AWAITING_HUMAN:
             awaiting_human_now += 1
-        
-        # Machine status counts
+
         if case.machine_assessment:
             ms = case.machine_assessment.status.value
             by_machine_status[ms] = by_machine_status.get(ms, 0) + 1
-        
-        # Effective status
+
         effective = None
         if case.resolution:
             effective = case.resolution.final_status.value
@@ -310,8 +358,7 @@ def get_stats(run_kind: schemas.RunKind = schemas.RunKind.DEMO, db: Session = De
             effective = case.machine_assessment.status.value
         if effective:
             by_effective_status[effective] = by_effective_status.get(effective, 0) + 1
-        
-        # BL comparison stats
+
         if case.email.category == schemas.EmailCategory.BL_COMPARISON:
             bl_total += 1
             if effective == "OK":
@@ -320,26 +367,24 @@ def get_stats(run_kind: schemas.RunKind = schemas.RunKind.DEMO, db: Session = De
                 bl_mismatch += 1
             elif effective == "NEEDS_REVIEW":
                 bl_needs_review += 1
-        
-        # Auto-completed (no resolution = machine did it alone)
+
         if case.workflow_status == schemas.WorkflowStatus.COMPLETED and not case.resolution:
             auto_completed += 1
-        
-        # AI stats
+
         if case.metrics.ai_calls > 0:
             ai_assisted_cases += 1
         ai_calls_total += case.metrics.ai_calls
         if case.metrics.processing_ms is not None:
             processing_ms_list.append(case.metrics.processing_ms)
-    
+
     avg_processing = None
     if processing_ms_list:
         avg_processing = sum(processing_ms_list) / len(processing_ms_list)
-    
+
     return schemas.Stats(
         generated_at=now,
         run_kind=run_kind,
-        total_cases=len(cases),
+        total_cases=total_filtered,
         unclassified=unclassified,
         by_category=by_category,
         bl_comparison=schemas.BLComparisonStats(
@@ -354,6 +399,7 @@ def get_stats(run_kind: schemas.RunKind = schemas.RunKind.DEMO, db: Session = De
         ai_calls_total=ai_calls_total,
         avg_processing_ms=avg_processing
     )
-# Start durable worker loop
-from .worker_loop import start_worker_thread
-start_worker_thread()
+
+
+# Mount the router — every route above is now reachable at /api/v1/*
+app.include_router(api_router)
