@@ -257,3 +257,25 @@ class DecisionRequest(BaseModel):
 
 class NotifiedRequest(BaseModel):
     run_id: str
+
+class BLComparisonStats(BaseModel):
+    total: int = 0
+    ok: int = 0
+    mismatch: int = 0
+    needs_review: int = 0
+
+class Stats(BaseModel):
+    generated_at: str
+    run_kind: RunKind
+    total_cases: int = 0
+    unclassified: int = 0
+    by_category: dict = {}
+    bl_comparison: BLComparisonStats = BLComparisonStats()
+    by_machine_status: dict = {}
+    by_effective_status: dict = {}
+    by_workflow: dict = {}
+    awaiting_human_now: int = 0
+    auto_completed: int = 0
+    ai_assisted_cases: int = 0
+    ai_calls_total: int = 0
+    avg_processing_ms: Optional[float] = None
