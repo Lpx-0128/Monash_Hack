@@ -59,8 +59,11 @@ def create_case(req: schemas.CreateCaseRequest, background_tasks: BackgroundTask
     # Create the case in PROCESSING state
     case = crud.create_initial_case(db, req.email_id)
     
+    # Create durable job
+    job = crud.create_job(db, case.case_id, case.run.run_id, "PROCESS_CASE")
+    
     # Trigger the background worker
-    background_tasks.add_task(worker.process_case, case.case_id)
+    background_tasks.add_task(worker.process_case, case.case_id, job.job_id)
     
     return case
 
@@ -128,8 +131,11 @@ def reprocess_case(case_id: str, background_tasks: BackgroundTasks, db: Session 
     
     crud.update_case(db, db_case, schema_case)
     
+    # Create durable job
+    job = crud.create_job(db, schema_case.case_id, schema_case.run.run_id, "PROCESS_CASE")
+    
     # Trigger the background worker
-    background_tasks.add_task(worker.process_case, case_id)
+    background_tasks.add_task(worker.process_case, case_id, job.job_id)
     
     return schema_case
 
@@ -211,8 +217,11 @@ def submit_decision(review_id: str, req: schemas.DecisionRequest, background_tas
             )
             crud.update_case(db, c, schema_case)
             
+            # Create durable job
+            job = crud.create_job(db, schema_case.case_id, schema_case.run.run_id, "APPLY_DECISION")
+            
             # Recompute and resume processing
-            background_tasks.add_task(worker.apply_decision, schema_case.case_id)
+            background_tasks.add_task(worker.apply_decision, schema_case.case_id, job.job_id)
             
             return schema_case
     

@@ -173,3 +173,40 @@ def map_case_to_summary(case: schemas.Case) -> schemas.CaseSummary:
         "run_kind": case.run.kind,
         "updated_at": case.updated_at
     })
+
+def create_job(db: Session, case_id: str, run_id: str, action: str):
+    now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    job = models.JobModel(
+        job_id=f"job_{uuid.uuid4().hex[:8]}",
+        case_id=case_id,
+        run_id=run_id,
+        action=action,
+        status="PENDING",
+        attempts=[],
+        created_at=now,
+        updated_at=now
+    )
+    db.add(job)
+    db.commit()
+    db.refresh(job)
+    return job
+
+def get_job(db: Session, job_id: str):
+    return db.query(models.JobModel).filter(models.JobModel.job_id == job_id).first()
+
+def get_pending_jobs(db: Session):
+    return db.query(models.JobModel).filter(models.JobModel.status == "PENDING").all()
+
+def update_job_status(db: Session, job_id: str, status: str, error: str = None):
+    job = get_job(db, job_id)
+    if job:
+        now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        job.status = status
+        job.updated_at = now
+        if error:
+            attempts = list(job.attempts)
+            attempts.append({"at": now, "error": error})
+            job.attempts = attempts
+        db.commit()
+        db.refresh(job)
+    return job

@@ -4,15 +4,20 @@ from datetime import datetime, timezone
 from sqlalchemy.orm import Session
 from . import crud, schemas, database
 
-def process_case(case_id: str):
+def process_case(case_id: str, job_id: str = None):
     """
     Dummy asynchronous worker that simulates classification and extraction.
     Person A's logic will plug in here.
     """
     db = database.SessionLocal()
     try:
+        if job_id:
+            crud.update_job_status(db, job_id, "RUNNING")
+            
         db_case = crud.get_case(db, case_id)
         if not db_case:
+            if job_id:
+                crud.update_job_status(db, job_id, "FAILED", error="Case not found")
             return
         
         case = crud.map_db_to_schema(db_case)
@@ -77,18 +82,30 @@ def process_case(case_id: str):
         case.completed_at = None
         
         crud.update_case(db, db_case, case)
+        
+        if job_id:
+            crud.update_job_status(db, job_id, "COMPLETED")
+    except Exception as e:
+        if job_id:
+            crud.update_job_status(db, job_id, "FAILED", error=str(e))
+        raise
     finally:
         db.close()
 
-def apply_decision(case_id: str):
+def apply_decision(case_id: str, job_id: str = None):
     """
     Dummy asynchronous worker that simulates recomputing dependencies 
     after a human resolves a NEEDS_REVIEW case.
     """
     db = database.SessionLocal()
     try:
+        if job_id:
+            crud.update_job_status(db, job_id, "RUNNING")
+            
         db_case = crud.get_case(db, case_id)
         if not db_case:
+            if job_id:
+                crud.update_job_status(db, job_id, "FAILED", error="Case not found")
             return
         
         case = crud.map_db_to_schema(db_case)
@@ -118,5 +135,12 @@ def apply_decision(case_id: str):
         )
         
         crud.update_case(db, db_case, case)
+        
+        if job_id:
+            crud.update_job_status(db, job_id, "COMPLETED")
+    except Exception as e:
+        if job_id:
+            crud.update_job_status(db, job_id, "FAILED", error=str(e))
+        raise
     finally:
         db.close()

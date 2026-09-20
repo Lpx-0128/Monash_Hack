@@ -23,3 +23,15 @@ class CaseModel(Base):
     failure = Column(JSON, nullable=True)
     history = Column(JSON, default=list)
     metrics = Column(JSON, nullable=False)
+
+class JobModel(Base):
+    __tablename__ = "jobs"
+    
+    job_id = Column(String, primary_key=True)
+    case_id = Column(String, index=True, nullable=False)
+    run_id = Column(String, nullable=False)
+    action = Column(String, nullable=False) # e.g. "PROCESS_CASE", "APPLY_DECISION"
+    status = Column(String, nullable=False, default="PENDING") # PENDING, RUNNING, COMPLETED, FAILED
+    attempts = Column(JSON, default=list) # List of failure records
+    created_at = Column(String, nullable=False)
+    updated_at = Column(String, nullable=False)
