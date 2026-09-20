@@ -53,15 +53,15 @@ def review_notified(review_id: str, req: schemas.NotifiedRequest, db: Session = 
     cases = crud.get_cases(db)
     for c in cases:
         schema_case = crud.map_db_to_schema(c)
-        if schema_case.review and schema_case.review.get("review_id") == review_id:
-            if schema_case.review.get("status") != schemas.ReviewStatus.OPEN:
+        if schema_case.review and schema_case.review.review_id == review_id:
+            if schema_case.review.status != schemas.ReviewStatus.OPEN:
                 raise HTTPException(status_code=409, detail="REVIEW_ALREADY_CLOSED")
             if schema_case.run.run_id != req.run_id:
                 raise HTTPException(status_code=409, detail="STALE_RUN")
             
             from datetime import datetime, timezone
             now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-            schema_case.review["notified_at"] = now
+            schema_case.review.notified_at = now
             
             schema_case.history.append(
                 schemas.HistoryEvent(
@@ -74,7 +74,7 @@ def review_notified(review_id: str, req: schemas.NotifiedRequest, db: Session = 
                 )
             )
             crud.update_case(db, c, schema_case)
-            return schemas.Review(**schema_case.review)
+            return schema_case.review
     
     raise HTTPException(status_code=404, detail="Review not found")
 
@@ -83,8 +83,8 @@ def submit_decision(review_id: str, req: schemas.DecisionRequest, background_tas
     cases = crud.get_cases(db)
     for c in cases:
         schema_case = crud.map_db_to_schema(c)
-        if schema_case.review and schema_case.review.get("review_id") == review_id:
-            if schema_case.review.get("status") != schemas.ReviewStatus.OPEN:
+        if schema_case.review and schema_case.review.review_id == review_id:
+            if schema_case.review.status != schemas.ReviewStatus.OPEN:
                 raise HTTPException(status_code=409, detail="REVIEW_ALREADY_CLOSED")
             if schema_case.run.run_id != req.run_id:
                 raise HTTPException(status_code=409, detail="STALE_RUN")
@@ -93,9 +93,9 @@ def submit_decision(review_id: str, req: schemas.DecisionRequest, background_tas
             now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
             
             # Close the review
-            schema_case.review["status"] = schemas.ReviewStatus.CLOSED
-            schema_case.review["closed_at"] = now
-            schema_case.review["close_reason"] = "DECISION_ACCEPTED"
+            schema_case.review.status = schemas.ReviewStatus.CLOSED
+            schema_case.review.closed_at = now
+            schema_case.review.close_reason = "DECISION_ACCEPTED"
             
             # Save resolution
             schema_case.resolution = schemas.Resolution(
@@ -124,8 +124,8 @@ def submit_decision(review_id: str, req: schemas.DecisionRequest, background_tas
             )
             crud.update_case(db, c, schema_case)
             
-            # In real life we'd kick off the worker to recompute
-            # background_tasks.add_task(worker.apply_decision, schema_case.case_id)
+            # Recompute and resume processing
+            background_tasks.add_task(worker.apply_decision, schema_case.case_id)
             
             return schema_case
     

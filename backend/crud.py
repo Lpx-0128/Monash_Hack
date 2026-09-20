@@ -16,12 +16,11 @@ def get_reviews(db: Session, run_kind: schemas.RunKind = None):
     results = []
     for c in cases:
         schema_case = map_db_to_schema(c)
-        if schema_case.review and schema_case.review.get("status") == schemas.ReviewStatus.OPEN:
+        if schema_case.review and schema_case.review.status == schemas.ReviewStatus.OPEN:
             if run_kind and schema_case.run.kind != run_kind:
                 continue
-            review_obj = schemas.Review(**schema_case.review)
             results.append(schemas.ReviewListItem(
-                review=review_obj,
+                review=schema_case.review,
                 case=map_case_to_summary(schema_case)
             ))
     return results
@@ -147,7 +146,7 @@ def map_db_to_schema(db_case: models.CaseModel) -> schemas.Case:
         "email": db_case.email,
         "documents": db_case.documents,
         "fields": db_case.fields_data,
-        "review": db_case.review,
+        "review": dict(db_case.review) if db_case.review else None,
         "failure": db_case.failure,
         "history": db_case.history,
         "metrics": db_case.metrics,
@@ -170,7 +169,7 @@ def map_case_to_summary(case: schemas.Case) -> schemas.CaseSummary:
         "review_reason": review_reason,
         "final_status": final_status,
         "mismatch_count": len([f for f in case.fields if f.result == schemas.FieldResult.MISMATCH]),
-        "has_open_review": (case.review is not None and case.review.get("status") == schemas.ReviewStatus.OPEN),
+        "has_open_review": (case.review is not None and case.review.status == schemas.ReviewStatus.OPEN),
         "run_kind": case.run.kind,
         "updated_at": case.updated_at
     })

@@ -50,7 +50,10 @@ if __name__ == "__main__":
         reviews = review_response.json()
         print(f"Total open reviews: {len(reviews)}")
         if len(reviews) > 0:
-            review_item = reviews[0]
+            review_item = next((r for r in reviews if r["case"]["case_id"] == case_id), None)
+            if not review_item:
+                print(f"No open review found for case {case_id}")
+                exit(1)
             review_id = review_item["review"]["review_id"]
             run_id = review_item["review"]["run_id"]
             
@@ -82,7 +85,15 @@ if __name__ == "__main__":
             
             # Check if case went back to processing
             case_resp = client.get(f"/cases/{case_id}")
-            print(f"Workflow status after decision: {case_resp.json()['workflow_status']}")
+            print(f"Workflow status after decision (should be PROCESSING): {case_resp.json()['workflow_status']}")
+            
+            print("Waiting 3 seconds for apply_decision to complete...")
+            time.sleep(3)
+            
+            final_case_resp = client.get(f"/cases/{case_id}")
+            final_case = final_case_resp.json()
+            print(f"Final workflow status: {final_case['workflow_status']}")
+            print(f"Final review status: {final_case['review']['status']}")
     else:
         print("Error in /reviews endpoint:", review_response.text)
     dup_response = client.post("/cases", json=demo_email_payload)

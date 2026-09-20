@@ -210,7 +210,7 @@ class Case(BaseModel):
     workflow_status: WorkflowStatus
     machine_assessment: Optional[MachineAssessment] = None
     fields: List[Any] = []
-    review: Optional[Any] = None
+    review: Optional[Review] = None
     resolution: Optional[Resolution] = None
     follow_up: FollowUp = FollowUp.NONE
     failure: Optional[Any] = None
