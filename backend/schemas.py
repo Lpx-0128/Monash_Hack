@@ -178,3 +178,21 @@ class Case(BaseModel):
     created_at: str
     updated_at: str
     completed_at: Optional[str] = None
+
+class CreateCaseRequest(BaseModel):
+    email_id: str
+
+class CaseSummary(BaseModel):
+    case_id: str
+    run_id: str
+    from_address: str = Field(alias="from")
+    subject: str
+    category: Optional[EmailCategory] = None
+    workflow_status: WorkflowStatus
+    machine_status: Optional[MachineStatus] = None
+    review_reason: Optional[ReviewReason] = None
+    final_status: Optional[MachineStatus] = None
+    mismatch_count: int = 0
+    has_open_review: bool = False
+    run_kind: RunKind
+    updated_at: str
