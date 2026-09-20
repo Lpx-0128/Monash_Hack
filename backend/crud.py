@@ -1,6 +1,7 @@
 from sqlalchemy.orm import Session
 from sqlalchemy import text as sa_text, func
 from . import models, schemas
+import json
 import copy
 from datetime import datetime, timezone
 import uuid
@@ -101,6 +102,59 @@ def update_case(db: Session, db_case: models.CaseModel, case: schemas.Case):
     return map_db_to_schema(db_case)
 
 
+def _load_inbox_email(email_id: str):
+    """Attempt to load real email metadata and attachments from resources if available."""
+    from pathlib import Path
+    import hashlib
+
+    bundle_root = Path(__file__).resolve().parent.parent / "resources" / "sdoc-hackathon-bundle"
+    inbox_file = bundle_root / "inbox" / f"{email_id}.json"
+
+    if inbox_file.exists():
+        try:
+            data = json.loads(inbox_file.read_text(encoding="utf-8"))
+            from_addr = data.get("from", "unknown@example.com")
+            subject = data.get("subject", "Pending classification")
+            docs = []
+            for att in data.get("attachments", []):
+                att_path = bundle_root / att
+                filename = Path(att).name
+                doc_id = filename
+                role = schemas.DocumentRole.SI if "_SI." in filename else (
+                    schemas.DocumentRole.BL if "_BL." in filename else schemas.DocumentRole.OTHER
+                )
+                content_hash = "mock_hash"
+                size_bytes = None
+                if att_path.exists():
+                    b = att_path.read_bytes()
+                    content_hash = hashlib.sha256(b).hexdigest()
+                    size_bytes = len(b)
+
+                media_type = "text/plain"
+                if filename.endswith(".pdf"):
+                    media_type = "application/pdf"
+                elif filename.endswith(".docx"):
+                    media_type = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+                elif filename.endswith(".xlsx"):
+                    media_type = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+
+                docs.append(schemas.DocumentRef(
+                    document_id=doc_id,
+                    role=role,
+                    filename=filename,
+                    media_type=media_type,
+                    size_bytes=size_bytes,
+                    content_hash=content_hash,
+                    demo_safe=True,
+                    parse_status="OK"
+                ))
+            return from_addr, subject, docs
+        except Exception:
+            pass
+
+    return "unknown@example.com", "Pending classification", []
+
+
 def create_case_with_job(db: Session, email_id: str, run_kind: schemas.RunKind = schemas.RunKind.DEMO) -> schemas.Case:
     """Create the initial case AND its first PROCESS_CASE job in one commit.
 
@@ -110,6 +164,8 @@ def create_case_with_job(db: Session, email_id: str, run_kind: schemas.RunKind =
     now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     run_id = f"run_{uuid.uuid4().hex[:8]}"
     job_id = f"job_{uuid.uuid4().hex[:8]}"
+
+    from_addr, subject, docs = _load_inbox_email(email_id)
 
     case_schema = schemas.Case(
         schema_version="2.1.1",
@@ -124,14 +180,14 @@ def create_case_with_job(db: Session, email_id: str, run_kind: schemas.RunKind =
         ),
         email=schemas.EmailInfo(**{
             "email_id": email_id,
-            "from": "unknown@example.com",
-            "subject": "Pending classification",
+            "from": from_addr,
+            "subject": subject,
             "received_at": None,
             "category": None,
             "classified_by": None,
             "classification_reason": None
         }),
-        documents=[],
+        documents=docs,
         workflow_status=schemas.WorkflowStatus.PROCESSING,
         machine_assessment=None,
         fields=[],

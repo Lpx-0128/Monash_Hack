@@ -541,7 +541,11 @@ def get_document_content(
 
     from pathlib import Path
     safe_filename = Path(matched_doc.filename).name
-    content_bytes = f"Document content for {matched_doc.filename} ({matched_doc.document_id})".encode("utf-8")
+    bundle_att = Path(__file__).resolve().parent.parent / "resources" / "sdoc-hackathon-bundle" / "attachments" / safe_filename
+    if bundle_att.exists():
+        content_bytes = bundle_att.read_bytes()
+    else:
+        content_bytes = f"Document content for {matched_doc.filename} ({matched_doc.document_id})".encode("utf-8")
 
     return Response(
         content=content_bytes,
