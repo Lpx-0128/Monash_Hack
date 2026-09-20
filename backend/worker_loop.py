@@ -94,13 +94,13 @@ def _handle_job_failure(db, job, error_msg: str):
             text("UPDATE jobs SET status='FAILED', attempts=:attempts, updated_at=:now WHERE job_id=:job_id"),
             {"attempts": json.dumps(attempts), "now": now, "job_id": job.job_id}
         )
-        # Mark the case itself as FAILED with a failure record
-        _mark_case_failed(db, job.case_id, error_msg, now)
+        # Mark the case itself as FAILED with a contract-shaped failure record
+        _mark_case_failed(db, job.case_id, error_msg, now, attempts)
     db.commit()
 
 
-def _mark_case_failed(db, case_id: str, error_msg: str, now: str):
-    """Set the case workflow_status to FAILED and write a failure record."""
+def _mark_case_failed(db, case_id: str, error_msg: str, now: str, attempts: list):
+    """Set the case workflow_status to FAILED and write a contract-shaped failure record."""
     db_case = crud.get_case(db, case_id)
     if db_case is None:
         return
@@ -108,14 +108,19 @@ def _mark_case_failed(db, case_id: str, error_msg: str, now: str):
     from . import schemas
     import uuid
     schema_case.workflow_status = schemas.WorkflowStatus.FAILED
-    schema_case.failure = {"code": "WORKER_ERROR", "message": error_msg, "failed_at": now}
+    # Contract §9 failure shape: {step, message, attempts}
+    schema_case.failure = {
+        "step": "WORKER",
+        "message": error_msg,
+        "attempts": attempts,
+    }
     schema_case.updated_at = now
     schema_case.history.append(
         schemas.HistoryEvent(
             event_id=f"evt_{uuid.uuid4().hex[:8]}",
             run_id=schema_case.run.run_id,
             at=now,
-            type="CASE_FAILED",
+            type="WORKER_FAILED",
             actor=schemas.Actor(kind="SYSTEM", id=None),
             summary=f"Worker permanently failed: {error_msg[:120]}"
         )
@@ -146,11 +151,14 @@ def worker_loop(stop_event: threading.Event = None, poll_interval: int = 5):
                     crud.update_job_status(db, job.job_id, "COMPLETED")
                 except Exception as exc:
                     _handle_job_failure(db, job, str(exc))
+                # Do NOT sleep — drain the queue before resting
+                continue
         except Exception as outer_exc:
             logger.exception("Unexpected error in worker loop: %s", outer_exc)
         finally:
             db.close()
 
+        # Only sleep when there was nothing to do
         time.sleep(poll_interval)
 
 

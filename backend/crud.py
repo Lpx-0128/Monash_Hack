@@ -130,6 +130,156 @@ def create_initial_case(db: Session, email_id: str) -> schemas.Case:
     )
     return create_case(db, case)
 
+
+def create_case_with_job(db: Session, email_id: str) -> schemas.Case:
+    """Create the initial case AND its first PROCESS_CASE job in one commit.
+
+    Prevents the crash window where a case exists in PROCESSING but no job
+    ever picks it up.
+    """
+    now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    run_id = f"run_{uuid.uuid4().hex[:8]}"
+    job_id = f"job_{uuid.uuid4().hex[:8]}"
+
+    case_schema = schemas.Case(
+        schema_version="2.1.1",
+        case_id=email_id,
+        run=schemas.Run(
+            run_id=run_id,
+            kind=schemas.RunKind.DEMO,
+            started_at=now,
+            input_version="v1",
+            config_version="v1",
+            demo_safe=True
+        ),
+        email=schemas.EmailInfo(**{
+            "email_id": email_id,
+            "from": "unknown@example.com",
+            "subject": "Pending classification",
+            "received_at": None,
+            "category": None,
+            "classified_by": None,
+            "classification_reason": None
+        }),
+        documents=[],
+        workflow_status=schemas.WorkflowStatus.PROCESSING,
+        machine_assessment=None,
+        fields=[],
+        review=None,
+        resolution=None,
+        follow_up=schemas.FollowUp.NONE,
+        failure=None,
+        history=[
+            schemas.HistoryEvent(
+                event_id=f"evt_{uuid.uuid4().hex[:8]}",
+                run_id=run_id,
+                at=now,
+                type="CASE_CREATED",
+                actor=schemas.Actor(kind="SYSTEM", id=None),
+                summary="Case ingested and run enqueued"
+            )
+        ],
+        metrics=schemas.Metrics(
+            ai_calls=0,
+            ai_assisted_fields=0,
+            processing_ms=None,
+            est_ai_cost_usd=None
+        ),
+        created_at=now,
+        updated_at=now,
+        completed_at=None
+    )
+    case_data = case_schema.model_dump(mode='json', by_alias=True)
+    db_case = models.CaseModel(
+        case_id=case_data["case_id"],
+        schema_version=case_data.get("schema_version", "2.1.1"),
+        workflow_status=case_data["workflow_status"],
+        machine_assessment=case_data.get("machine_assessment"),
+        resolution=case_data.get("resolution"),
+        follow_up=case_data.get("follow_up"),
+        created_at=case_data["created_at"],
+        updated_at=case_data["updated_at"],
+        completed_at=case_data.get("completed_at"),
+        run=case_data["run"],
+        email=case_data["email"],
+        documents=case_data.get("documents", []),
+        fields_data=case_data.get("fields", []),
+        review=case_data.get("review"),
+        failure=case_data.get("failure"),
+        history=case_data.get("history", []),
+        metrics=case_data["metrics"],
+    )
+    db_job = models.JobModel(
+        job_id=job_id,
+        case_id=email_id,
+        run_id=run_id,
+        action="PROCESS_CASE",
+        status="PENDING",
+        attempts=[],
+        created_at=now,
+        updated_at=now,
+    )
+    db.add(db_case)
+    db.add(db_job)
+    db.commit()  # single commit — both or neither
+    db.refresh(db_case)
+    return map_db_to_schema(db_case)
+
+
+def update_case_and_create_job(db: Session, db_case: models.CaseModel, case: schemas.Case, action: str):
+    """Update a case and insert a new job in one commit.
+
+    Prevents the crash window where the review is already closed but no
+    APPLY_DECISION job exists, leaving the case stuck in PROCESSING.
+    """
+    now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    case_data = case.model_dump(mode='json', by_alias=True)
+    db_case.workflow_status = case_data["workflow_status"]
+    db_case.machine_assessment = case_data.get("machine_assessment")
+    db_case.resolution = case_data.get("resolution")
+    db_case.follow_up = case_data.get("follow_up")
+    db_case.updated_at = case_data["updated_at"]
+    db_case.completed_at = case_data.get("completed_at")
+    db_case.run = case_data["run"]
+    db_case.email = case_data["email"]
+    db_case.documents = case_data.get("documents", [])
+    db_case.fields_data = case_data.get("fields", [])
+    db_case.review = case_data.get("review")
+    db_case.failure = case_data.get("failure")
+    db_case.history = case_data.get("history", [])
+    db_case.metrics = case_data["metrics"]
+    db_job = models.JobModel(
+        job_id=f"job_{uuid.uuid4().hex[:8]}",
+        case_id=case.case_id,
+        run_id=case.run.run_id,
+        action=action,
+        status="PENDING",
+        attempts=[],
+        created_at=now,
+        updated_at=now,
+    )
+    db.add(db_job)
+    db.commit()  # single commit — both or neither
+    db.refresh(db_case)
+
+
+def cancel_pending_jobs_for_case(db: Session, case_id: str):
+    """Mark all PENDING/RUNNING jobs for a case as SUPERSEDED before reprocessing.
+
+    Ensures the old worker cannot run against the new run.
+    """
+    from sqlalchemy import text as sa_text
+    now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    db.execute(
+        sa_text(
+            "UPDATE jobs SET status='SUPERSEDED', updated_at=:now "
+            "WHERE case_id=:case_id AND status IN ('PENDING','RUNNING')"
+        ),
+        {"now": now, "case_id": case_id}
+    )
+    db.commit()
+
+
 def map_db_to_schema(db_case: models.CaseModel) -> schemas.Case:
     data = {
         "case_id": db_case.case_id,

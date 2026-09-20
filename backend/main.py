@@ -16,7 +16,7 @@ models.Base.metadata.create_all(bind=engine)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Start the worker loop once on startup — never as an import side effect."""
+    """Start the worker loop exactly once at startup — never as an import side effect."""
     from .worker_loop import start_worker_thread
     start_worker_thread()
     yield
@@ -26,7 +26,6 @@ app = FastAPI(title="Shipping Document Verification API", version="2.1.1", lifes
 
 # ---------------------------------------------------------------------------
 # Error response envelope — contract §7
-# Maps HTTP exceptions to {error: {code, message}} with proper contract codes.
 # ---------------------------------------------------------------------------
 
 _HTTP_TO_CODE = {
@@ -38,21 +37,22 @@ _HTTP_TO_CODE = {
     503: "SERVICE_UNAVAILABLE",
 }
 
+# Contract-defined error codes that may appear verbatim in detail
+_CONTRACT_CODES = {
+    "STALE_RUN", "REVIEW_ALREADY_CLOSED", "CASE_NOT_FOUND", "REVIEW_NOT_FOUND",
+    "NOT_FOUND", "BAD_REQUEST", "CONFLICT", "INTERNAL_ERROR",
+    "SERVICE_UNAVAILABLE", "UNPROCESSABLE",
+}
+
 
 @app.exception_handler(HTTPException)
 async def http_exception_handler(request: Request, exc: HTTPException):
-    # If the caller already set detail to a known contract code (e.g. STALE_RUN,
-    # REVIEW_ALREADY_CLOSED) keep it; otherwise derive from the status code.
     detail = exc.detail or ""
-    known_contract_codes = {
-        "STALE_RUN", "REVIEW_ALREADY_CLOSED", "CASE_NOT_FOUND", "REVIEW_NOT_FOUND",
-        "NOT_FOUND", "BAD_REQUEST", "CONFLICT", "INTERNAL_ERROR",
-    }
-    if detail in known_contract_codes:
+    if detail in _CONTRACT_CODES:
         code = detail
         message = detail.replace("_", " ").title()
     else:
-        code = _HTTP_TO_CODE.get(exc.status_code, "ERROR")
+        code = _HTTP_TO_CODE.get(exc.status_code, "INTERNAL_ERROR")
         message = detail if detail else code
     return JSONResponse(
         status_code=exc.status_code,
@@ -69,18 +69,15 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
 
 
 # ---------------------------------------------------------------------------
-# Router — all routes live under /api/v1
+# Health / ready at the root (contract §5 — cloud probes hit bare paths)
 # ---------------------------------------------------------------------------
 
-api_router = APIRouter(prefix="/api/v1")
-
-
-@api_router.get("/health")
+@app.get("/health")
 def health_check():
     return {"status": "OK", "version": "2.1.1"}
 
 
-@api_router.get("/ready")
+@app.get("/ready")
 def readiness_check():
     db = SessionLocal()
     try:
@@ -90,6 +87,13 @@ def readiness_check():
         raise HTTPException(status_code=503, detail="SERVICE_UNAVAILABLE")
     finally:
         db.close()
+
+
+# ---------------------------------------------------------------------------
+# API router — all business routes under /api/v1
+# ---------------------------------------------------------------------------
+
+api_router = APIRouter(prefix="/api/v1")
 
 
 @api_router.get("/cases", response_model=List[schemas.CaseSummary])
@@ -103,7 +107,7 @@ def list_cases(
     limit: int = 100,
     db: Session = Depends(get_db)
 ):
-    # Fetch all, filter in Python before slicing (DB-level filter is future work)
+    # Fetch all, filter before slicing (DB-level filter is future work)
     all_cases = crud.get_cases(db, skip=0, limit=10_000)
     summaries = [crud.map_case_to_summary(crud.map_db_to_schema(c)) for c in all_cases]
 
@@ -128,8 +132,8 @@ def create_case(req: schemas.CreateCaseRequest, response: Response, db: Session 
         response.status_code = status.HTTP_200_OK
         return crud.map_db_to_schema(db_case)
 
-    case = crud.create_initial_case(db, req.email_id)
-    crud.create_job(db, case.case_id, case.run.run_id, "PROCESS_CASE")
+    # Create case and job in one transaction so no crash can strand a case in PROCESSING
+    case = crud.create_case_with_job(db, req.email_id)
     return case
 
 
@@ -194,6 +198,10 @@ def reprocess_case(case_id: str, db: Session = Depends(get_db)):
         )
     )
 
+    # Cancel stale PENDING/RUNNING jobs for this case before creating the new one,
+    # so the old worker cannot run against the new run.
+    crud.cancel_pending_jobs_for_case(db, case_id)
+
     crud.update_case(db, db_case, schema_case)
     crud.create_job(db, schema_case.case_id, schema_case.run.run_id, "PROCESS_CASE")
     return schema_case
@@ -210,7 +218,7 @@ def review_notified(review_id: str, req: schemas.NotifiedRequest, db: Session = 
     for c in cases:
         schema_case = crud.map_db_to_schema(c)
         if schema_case.review and schema_case.review.review_id == review_id:
-            # Idempotent: if already notified, return current review without error
+            # Idempotent: already notified → return current review silently
             if schema_case.review.notified_at is not None:
                 return schema_case.review
             if schema_case.review.status != schemas.ReviewStatus.OPEN:
@@ -220,7 +228,6 @@ def review_notified(review_id: str, req: schemas.NotifiedRequest, db: Session = 
 
             now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
             schema_case.review.notified_at = now
-
             schema_case.history.append(
                 schemas.HistoryEvent(
                     event_id=f"evt_{uuid.uuid4().hex[:8]}",
@@ -250,12 +257,11 @@ def submit_decision(review_id: str, req: schemas.DecisionRequest, db: Session = 
 
             now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
-            # Close the review
             schema_case.review.status = schemas.ReviewStatus.CLOSED
             schema_case.review.closed_at = now
             schema_case.review.close_reason = "DECISION_ACCEPTED"
 
-            # Save resolution (final_status left as None; worker sets it after applying)
+            # Resolution stored; final_status set by worker after it applies the decision
             schema_case.resolution = schemas.Resolution(
                 review_id=review_id,
                 run_id=schema_case.run.run_id,
@@ -265,13 +271,13 @@ def submit_decision(review_id: str, req: schemas.DecisionRequest, db: Session = 
                 channel=req.channel,
                 user_message=req.user_message,
                 resolved_at=now,
-                final_status=schemas.MachineStatus.NEEDS_REVIEW,  # placeholder until worker recomputes
+                final_status=schemas.MachineStatus.NEEDS_REVIEW,  # worker overwrites this
                 final_defect_fields=[]
             )
 
             schema_case.workflow_status = schemas.WorkflowStatus.PROCESSING
 
-            # Correct contract event names
+            # Contract event names: DECISION_RECEIVED on intake, DECISION_QUEUED once enqueued
             schema_case.history.append(
                 schemas.HistoryEvent(
                     event_id=f"evt_{uuid.uuid4().hex[:8]}",
@@ -287,14 +293,14 @@ def submit_decision(review_id: str, req: schemas.DecisionRequest, db: Session = 
                     event_id=f"evt_{uuid.uuid4().hex[:8]}",
                     run_id=schema_case.run.run_id,
                     at=now,
-                    type="DECISION_APPLIED",
+                    type="DECISION_QUEUED",
                     actor=schemas.Actor(kind="SYSTEM", id=None),
-                    summary=f"Decision queued for application"
+                    summary="Decision queued for application by worker"
                 )
             )
 
-            crud.update_case(db, c, schema_case)
-            crud.create_job(db, schema_case.case_id, schema_case.run.run_id, "APPLY_DECISION")
+            # Case update and job insert in one transaction
+            crud.update_case_and_create_job(db, c, schema_case, "APPLY_DECISION")
             return schema_case
 
     raise HTTPException(status_code=404, detail="REVIEW_NOT_FOUND")
@@ -311,7 +317,7 @@ def get_stats(run_kind: schemas.RunKind = schemas.RunKind.DEMO, db: Session = De
     now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     cases = crud.get_cases(db, skip=0, limit=10_000)
 
-    # Pre-populate all enum keys with 0 so the frontend always sees every key
+    # Pre-populate all enum keys with 0 so frontend always sees every key
     by_category = {e.value: 0 for e in schemas.EmailCategory}
     by_machine_status = {e.value: 0 for e in schemas.MachineStatus}
     by_effective_status = {e.value: 0 for e in schemas.MachineStatus}
@@ -401,5 +407,5 @@ def get_stats(run_kind: schemas.RunKind = schemas.RunKind.DEMO, db: Session = De
     )
 
 
-# Mount the router — every route above is now reachable at /api/v1/*
+# Mount the versioned router
 app.include_router(api_router)
