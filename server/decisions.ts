@@ -104,7 +104,7 @@ export function prepareDecision(
   input: unknown,
   actor: string,
   documents: Map<string, string>,
-  channel: "DASHBOARD" | "TELEGRAM" = "DASHBOARD",
+  channel: "DASHBOARD" | "TELEGRAM" | "VOICE" = "DASHBOARD",
 ): AcceptedWork {
   const parsed = decisionSchema.safeParse(input);
   if (!parsed.success)

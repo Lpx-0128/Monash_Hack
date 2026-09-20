@@ -288,7 +288,7 @@ const historyType = z.enum([
   "CASE_COMPLETED",
 ]);
 export const caseSchema: z.ZodType<Case> = obj({
-  schema_version: z.literal("2.1.1"),
+  schema_version: z.literal("2.1.2"),
   case_id: id,
   run: obj({
     run_id: id,
@@ -329,7 +329,7 @@ export const caseSchema: z.ZodType<Case> = obj({
     action,
     value_source: z.enum(["DOCUMENT_CONFIRMED", "MANUAL_OVERRIDE"]).nullable(),
     actor_id: id,
-    channel: z.enum(["TELEGRAM", "DASHBOARD"]),
+    channel: z.enum(["TELEGRAM", "DASHBOARD", "VOICE"]),
     user_message: z.string().nullable(),
     resolved_at: time,
     final_status: status,

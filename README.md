@@ -1,9 +1,10 @@
 # Harbor Review
 
-Shipping-document review dashboard, stateful synthetic Node API, Hermes Telegram integration and optional Copilot interpretation. Built with React, TypeScript and Vite against Shared System Contract v2.1.1. F0–F3 are verified within the simulator boundary; hosted deployment and real-backend integration remain outstanding. Extraction and grounding are simulated, even when Telegram and Copilot are real.
+Shipping-document review dashboard, stateful synthetic Node API, Hermes Telegram integration, optional Copilot interpretation and a gated voice adapter. The local simulator, shared validators and dashboard use Shared System Contract v2.1.2. Voice supports authenticated spoken CHOICE decisions and exact confirmation against the simulator; handset acceptance remains required before V1 completion. F0–F3 are verified within the simulator boundary. The Azure deployment uses Azure AI interpretation, 520 organiser emails and voice disabled; real-backend integration remains outstanding. Extraction and grounding are simulated, even when transport and interpretation providers are real.
 
 ## Start here
 
+- [Live Azure dashboard](https://harbor-review-52597804.japaneast.cloudapp.azure.com) and [deployment record](docs/deployment.md): full-dataset mock release, costs, shutdown schedule and verification limits.
 - [Setup and walkthrough](docs/setup.md): dashboard, bot pairing, three-service startup, Copilot, recovery and deployment configuration.
 - [Verification and status](docs/verification.md): acceptance requirements, actual tests/live checks, known limits and outstanding gates.
 - [Judge rehearsal and backup-recording plan](docs/setup.md#four-minute-judge-rehearsal): browser/Telegram routes, recovery steps and final real-integration checklist.

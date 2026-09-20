@@ -14,7 +14,7 @@ export type ValueOrigin = "DOCUMENT_EXTRACTED" | "DOCUMENT_CONFIRMED" | "MANUAL_
 export type ValueSource = "DOCUMENT_CONFIRMED" | "MANUAL_OVERRIDE";
 export type Side = "SI" | "BL";
 export type RunKind = "EVAL" | "DEMO";
-export type Channel = "TELEGRAM" | "DASHBOARD";
+export type Channel = "TELEGRAM" | "DASHBOARD" | "VOICE";
 export type DocumentRole = "UNKNOWN" | "SI" | "BL" | "OTHER";
 export type FollowUp = "NONE" | "CORRECTION_REQUIRED" | "AWAIT_EXTERNAL";
 export type ReviewUiMode = "CHOICE" | "VALUE_INPUT" | "ACKNOWLEDGE";
@@ -139,7 +139,7 @@ export interface RunRef {
   demo_safe: boolean;
 }
 export interface Case {
-  schema_version: "2.1.1";
+  schema_version: "2.1.2";
   case_id: string; // email_id within the authenticated EVAL or DEMO namespace
   run: RunRef;
   email: {

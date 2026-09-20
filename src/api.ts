@@ -75,7 +75,7 @@ export async function request<T>(
     throw new RequestError(
       502,
       "INVALID_PAYLOAD",
-      "API data failed Shared Contract v2.1.1 validation. Last valid data is retained.",
+      "API data failed Shared Contract v2.1.2 validation. Last valid data is retained.",
     );
   return parsed.data;
 }
@@ -118,6 +118,12 @@ function httpApi(base: string): CaseApi {
 export const createSimulatedApi = () => httpApi("/api/v1");
 export const createLiveApi = (base = "/api/v1") => httpApi(base);
 export const isSimulation = import.meta.env.VITE_API_MODE !== "live";
+export let hostedDeployment = false;
+export let readOnlySample = false;
+export function setHostedContext(hosted: boolean, sample: boolean) {
+  hostedDeployment = hosted;
+  readOnlySample = sample;
+}
 export const api = isSimulation
   ? createSimulatedApi()
   : createLiveApi(import.meta.env.VITE_API_BASE ?? "/api/v1");
@@ -135,11 +141,15 @@ export const initialize = () =>
         "/api/demo/config",
         z.object({
           mode: z.literal("synthetic"),
-          contract: z.literal("2.1.1"),
+          contract: z.literal("2.1.2"),
           milestone: z.enum(["F1", "F2"]),
           actor_id: z.literal("demo-guest"),
           decision_fault: z.enum(["none", "lost-response", "fail-resumption"]),
           fault: z.enum(["none", "outage", "slow", "denied"]),
+          hosted: z.boolean().optional(),
+          telegram_url: z.string().url().optional(),
+          sample: z.boolean().optional(),
+          dataset_size: z.number().optional(),
         }),
       )
     : Promise.resolve(null);

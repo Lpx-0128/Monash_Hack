@@ -54,6 +54,9 @@ def wire(application, adapter):
     db.execute("CREATE TABLE IF NOT EXISTS inbound (id TEXT PRIMARY KEY, payload TEXT NOT NULL, done INTEGER NOT NULL DEFAULT 0)")
     db.execute("CREATE TABLE IF NOT EXISTS pairing (actor TEXT, chat TEXT, PRIMARY KEY(actor, chat))")
     allowed = {(x["actor"], x["chat"]) for x in json.loads(os.environ.get("F2_RECIPIENTS", "[]"))}
+    public_enrollment = os.environ.get('HARBOR_HOSTED') == 'true'
+    if public_enrollment:
+        allowed.update((a, c) for a, c in db.execute('SELECT actor,chat FROM pairing') if a == c and a.isdigit())
 
     async def receive(update, context):
         if application is not _active_application:
@@ -61,6 +64,11 @@ def wire(application, adapter):
         user, message = update.effective_user, update.effective_message
         if user and message and not user.is_bot:
             actor, chat = str(user.id), str(message.chat_id)
+            if public_enrollment and message.chat.type != 'private':
+                raise ApplicationHandlerStop
+            if public_enrollment and (actor, chat) not in allowed and message.text == '/start' and actor == chat and len(allowed) < 99:
+                db.execute('INSERT OR IGNORE INTO pairing VALUES (?,?)', (actor,chat)); db.commit()
+                allowed.add((actor,chat))
             if (actor, chat) not in allowed:
                 # Only local IDs, no source access or outbound contact before explicit designation.
                 if message.text == "/start" and message.chat.type == "private":
@@ -124,8 +132,12 @@ def wire(application, adapter):
             except Exception:
                 return web.json_response({"error": "Telegram delivery unavailable"}, status=503)
         app = web.Application(client_max_size=12_000_000)
+        async def health(request):
+            return web.json_response({'status':'ok','interpretation_configured':os.environ.get('F3_ENABLED') == 'true' and bool(os.environ.get('F3_MODEL'))})
+        app.router.add_get('/health', health)
         app.router.add_post("/send", send)
         interpreting = asyncio.Lock()
+        db.execute('CREATE TABLE IF NOT EXISTS model_usage (day TEXT PRIMARY KEY, calls INTEGER NOT NULL)')
         async def interpret_request(request):
             if request.headers.get('Authorization') != 'Bearer ' + secret:
                 return web.json_response({'error':'unauthorized'}, status=401)
@@ -139,6 +151,12 @@ def wire(application, adapter):
                 payload=await request.json()
                 from .interpretation import interpret
                 async with interpreting:
+                    from datetime import datetime, timezone
+                    day = datetime.now(timezone.utc).date().isoformat()
+                    row = db.execute('SELECT calls FROM model_usage WHERE day=?', (day,)).fetchone()
+                    if row and row[0] >= int(os.environ.get('F3_DAILY_CALL_LIMIT', '200')):
+                        return web.json_response({'error':'Daily interpretation limit reached; use structured review controls'}, status=429)
+                    db.execute('INSERT INTO model_usage VALUES (?,1) ON CONFLICT(day) DO UPDATE SET calls=calls+1', (day,)); db.commit()
                     result=await asyncio.wait_for(asyncio.to_thread(interpret,payload), timeout=22)
                 return web.json_response(result)
             except Exception:

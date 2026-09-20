@@ -22,6 +22,8 @@ import {
 import { ApiError } from "./errors";
 export { ApiError } from "./errors";
 import { prepareDecision, applyDecision, type AcceptedWork } from "./decisions";
+import { makeDatasetFixture } from "./dataset";
+import type { ParticipantEmail } from "../shared/participant-mapping";
 export const summary = (c: Case): CaseSummary => ({
   case_id: c.case_id,
   run_id: c.run.run_id,
@@ -114,7 +116,7 @@ export class DemoStore {
   invalidAttempts: number[] = [];
   decisionFault: "none" | "lost-response" | "fail-resumption" = "none";
   fault: "none" | "outage" | "slow" | "denied" = "none";
-  constructor() {
+  constructor(private dataset?: ParticipantEmail[]) {
     this.reset();
   }
   reset(empty = false) {
@@ -126,6 +128,14 @@ export class DemoStore {
     this.invalidAttempts = [];
     this.decisionFault = "none";
     this.fault = "none";
+    if (!empty && this.dataset) {
+      for (const source of this.dataset) {
+        const c = makeDatasetFixture(source, this.documents, `demo_${source.email_id}_${randomUUID()}`);
+        auditDocuments(c, this.documents);
+        this.cases.set(c.case_id, c);
+      }
+      return;
+    }
     if (!empty)
       for (const [scenario] of scenarios) {
         const c = makeFixture(
@@ -145,7 +155,7 @@ export class DemoStore {
     pathId: string,
     input: unknown,
     actor: string,
-    channel: "DASHBOARD" | "TELEGRAM" = "DASHBOARD",
+    channel: "DASHBOARD" | "TELEGRAM" | "VOICE" = "DASHBOARD",
   ) {
     const now = Date.now();
     this.invalidAttempts = this.invalidAttempts.filter((t) => now - t < 60000);
@@ -221,7 +231,19 @@ export class DemoStore {
     });
   }
   restore(data: ReturnType<DemoStore["snapshot"]>) {
-    this.cases = new Map(data.cases.map(([id, c]) => [id, validateCase(c)]));
+    this.cases = new Map(
+      data.cases.map(([id, c]) => {
+        // Current synthetic DEMO state only. Frozen EVAL exports are never loaded here.
+        const old = c as unknown as { schema_version: string };
+        if (
+          old.schema_version === "2.1.1" &&
+          c.run.kind === "DEMO" &&
+          c.run.demo_safe
+        )
+          c = { ...c, schema_version: "2.1.2" };
+        return [id, validateCase(c)];
+      }),
+    );
     this.documents = new Map(data.documents);
     this.archivedReviews = new Map(data.archivedReviews);
     this.jobs = new Map(data.jobs);
@@ -286,6 +308,7 @@ export class DemoStore {
   }
   reprocess(id: string) {
     this.get(id);
+    if (this.dataset) throw new ApiError(403, "FORBIDDEN", "Dataset replay is controlled by the deployment operator.");
     const scenario = scenarios.find(([s]) => `demo_${s}` === id)![0];
     return this.begin(scenario);
   }

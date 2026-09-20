@@ -95,7 +95,7 @@ export function sourceContext(c: Case, scenario: string) {
       ? {
           intent_mapping: "UNRESOLVED",
           classification_basis:
-            "Contract v2.1.1 BL baseline; participant intent mapping is not verified.",
+            "Contract v2.1.2 BL baseline; participant intent mapping is not verified.",
         }
       : {}),
   };
@@ -114,7 +114,7 @@ export function makeFixture(
 ): Case {
   const caseId = `demo_${scenario}`;
   const c: Case = {
-    schema_version: "2.1.1",
+    schema_version: "2.1.2",
     case_id: caseId,
     run: {
       run_id: runId,

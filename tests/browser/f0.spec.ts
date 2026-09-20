@@ -378,7 +378,7 @@ test("participant-shaped synthetic context, fictional receipt time and unresolve
   expect(errors).toEqual([]);
 });
 
-test("v2.1.1 known and unknown receipt times remain separate from system activity through replay", async ({
+test("v2.1.2 known and unknown receipt times remain separate from system activity through replay", async ({
   page,
 }) => {
   for (const id of ["processing", "mismatch", "match", "accepted-processing"]) {
@@ -411,6 +411,6 @@ test("v2.1.1 known and unknown receipt times remain separate from system activit
   expect(after.email.received_at).toBeNull();
   expect(after.created_at).toBe(before.created_at);
   expect(after.run.started_at).not.toBe(before.run.started_at);
-  expect(after.schema_version).toBe("2.1.1");
+  expect(after.schema_version).toBe("2.1.2");
   await expect(page.getByText(/Received time unavailable/)).toBeVisible();
 });

@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AddressInfo } from "node:net";
 import { createApp } from "../server/app";
+import type { ParticipantEmail } from "../shared/participant-mapping";
 import { ReviewApi, RemoteError } from "../interaction/api";
 import {
   ReviewEngine,
@@ -49,9 +50,10 @@ class FakeTransport implements Transport {
     return "file-" + this.files.length;
   }
 }
-async function setup(t: any) {
+async function setup(t: any, dataset?: ParticipantEmail[]) {
   const dir = mkdtempSync(join(tmpdir(), "harbor-f2-")),
     app = createApp({
+      dataset,
       stateFile: join(dir, "backend.json"),
       interaction: { token: secret, actors: ["101", "202"] },
     }),
@@ -787,7 +789,13 @@ test("Telegram queue puts evidenced quick reviews before investigation without h
   const queue = h.transport.messages.find(
     (m) => m.chat === "101" && m.buttons.length,
   )!;
-  const buttons = queue.buttons.flat();
+  const buttons = queue.buttons.flat().filter(b => h.engine.state.buttons[b.callback_data.slice(5)].action === "show");
+  let page = queue;
+  while (page.buttons.flat().some(b => b.text === "Next →")) {
+    await h.click("Next →");
+    page = h.transport.messages.at(-1)!;
+    buttons.push(...page.buttons.flat().filter(b => h.engine.state.buttons[b.callback_data.slice(5)].action === "show"));
+  }
   const labels = buttons.map((b) => b.text);
   assert.ok(labels[0].startsWith("Quick review"));
   const firstInvestigation = labels.findIndex((l) =>
@@ -806,4 +814,44 @@ test("Telegram queue puts evidenced quick reviews before investigation without h
   assert.ok(ids.includes("demo_field-input"));
   assert.ok(ids.includes("demo_blocked-open"));
   assert.equal(new Set(ids).size, ids.length);
+});
+
+test("Full inbox queue stays bounded, reaches every case, and retries a failed digest after restart", async (t) => {
+  const dataset = Array.from({length:520}, (_, i) => ({email_id:`email_${i}`, from:"sender@example.test", subject:"Long source subject ".repeat(8), body:"Practice source", attachments:i < 126 ? ["SI.txt","BL.txt"] : []}));
+  const h = await setup(t, dataset);
+  await h.input({text:"/reviews"});
+  h.transport.failSend = true;
+  await assert.rejects(h.tick(), /Injected send failure/);
+  assert.equal(h.engine.state.digests["101/101"], undefined);
+  assert.ok(h.engine.state.digestRequested?.includes("101/101"));
+  h.restart();
+  h.transport.failSend = false;
+  await h.tick();
+  assert.ok(h.engine.state.digests["101/101"]);
+  const expected = (await h.api.list()).filter(c => c.has_open_review || c.final_status === "MISMATCH").map(c => c.case_id);
+  assert.ok(expected.length > 50);
+  const seen: string[] = [];
+  let page = h.transport.messages.at(-1)!;
+  let selected: {message:string; callback:string} | undefined;
+  for (;;) {
+    const buttons = page.buttons.flat();
+    assert.ok(buttons.length <= 12);
+    assert.ok(Buffer.byteLength(JSON.stringify({inline_keyboard:page.buttons})) < 4000);
+    for (const button of buttons) {
+      const stored = h.engine.state.buttons[button.callback_data.slice(5)];
+      if (stored.action !== "show") continue;
+      seen.push(stored.binding.caseId);
+      if (stored.binding.review) selected = {message:page.id,callback:button.callback_data};
+    }
+    if (!buttons.some(b => b.text === "Next →")) break;
+    h.restart();
+    await h.click("Next →");
+    page = h.transport.messages.at(-1)!;
+  }
+  assert.deepEqual([...seen].sort(), expected.sort());
+  assert.equal(new Set(seen).size, seen.length);
+  assert.ok(selected);
+  await h.input(selected);
+  assert.ok(h.transport.files.length > 0, "Selected review delivers source documents");
+  assert.ok(h.transport.messages.at(-1)!.buttons.length > 0, "Selected review has action buttons");
 });

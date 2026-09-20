@@ -4,6 +4,7 @@ import {
   type WorkHint,
 } from "../shared/presentation-priority";
 import { randomBytes } from "node:crypto";
+import { dashboardLink } from "../shared/dashboard-link";
 import {
   existsSync,
   readFileSync,
@@ -162,10 +163,28 @@ export class ReviewEngine {
     return job;
   }
   link(b: Binding) {
+    if (process.env.HARBOR_HOSTED === "true") return dashboardLink(this.dashboard, b.actor, `/cases/${encodeURIComponent(b.caseId)}`);
     return `${this.dashboard}/cases/${encodeURIComponent(b.caseId)}`;
   }
   async tell(r: Recipient, text: string, buttons?: Button[][]) {
+    if (process.env.F3_PROVIDER === "azure-foundry") text = text.replaceAll("Copilot", "Azure AI");
     return this.transport.send(r.chat, text, buttons);
+  }
+  async sendQueue(choices: Delivery[], labels: string[], offset = 0) {
+    const size = 10;
+    offset = Math.max(0, Math.min(offset, Math.floor((choices.length - 1) / size) * size));
+    const page = choices.slice(offset, offset + size);
+    const buttons = page.map((d, i) => [this.button(d, labels[offset + i], "show", undefined, d.key)]);
+    const navigation: Button[] = [];
+    for (const [label, next] of [["← Previous", offset - size], ["Next →", offset + size]] as const) {
+      if (next < 0 || next >= choices.length) continue;
+      navigation.push(this.button(page[0], label, "queue", undefined, JSON.stringify({
+        keys: choices.map(d => d.key), labels, offset: next,
+      })));
+    }
+    if (navigation.length) buttons.push(navigation);
+    await this.sendButtons(page[0],
+      `${choices.length} practice cases are queued.\nShowing ${offset + 1}–${offset + page.length}.\nQuick reviews are listed first; investigation and external follow-up come later. This is guidance, not a guarantee of completion.\nPick one below; I won’t send the whole backlog.\n\nSend /pause to stop new notifications.`, buttons);
   }
   binding(c: Case, r: Recipient): Binding {
     return {
@@ -220,7 +239,7 @@ export class ReviewEngine {
     for (const button of Object.values(this.state.buttons)) {
       if (
         !button.message ||
-        ["details", "dashboard", "show"].includes(button.action)
+        ["details", "dashboard", "show", "queue"].includes(button.action)
       )
         continue;
       const p = button.proposal
@@ -465,6 +484,7 @@ export class ReviewEngine {
             recipient,
             "Let’s review your practice cases. I’ll show a queue—pick one to see what needs your attention.\n\nNew notifications are on. Send /pause any time to quiet them.",
           );
+          if (process.env.HARBOR_HOSTED === "true") await this.tell(recipient, `Open your saved dashboard (one-use link, valid for five minutes):\n${dashboardLink(this.dashboard, recipient.actor)}`);
           return;
         }
         if (u.callback) {
@@ -477,6 +497,21 @@ export class ReviewEngine {
           )
             throw new RemoteError(403, "FORBIDDEN");
           const b = btn.binding;
+          if (btn.action === "queue") {
+            const page = JSON.parse(btn.option!) as { keys: string[]; labels: string[]; offset: number };
+            const summaries = await this.apiFor(b.actor).list();
+            const choices: Delivery[] = [], labels: string[] = [];
+            for (const [i, key] of page.keys.entries()) {
+              const d = this.state.deliveries[key];
+              if (d && d.actor === u.actor && d.chat === u.chat && summaries.some(s =>
+                s.case_id === d.caseId && s.run_id === d.run && (d.type !== "review" || s.has_open_review))) {
+                choices.push(d); labels.push(page.labels[i]);
+              }
+            }
+            if (choices.length) await this.sendQueue(choices, labels, page.offset);
+            else await this.tell(b, "No cases remain in this queue. Send /reviews to refresh.");
+            return;
+          }
           if (btn.action === "details" || btn.action === "dashboard") {
             const c = await this.apiFor(b.actor).get(b.caseId);
             if (
@@ -837,30 +872,15 @@ export class ReviewEngine {
                 "quick",
               ),
             );
-            this.state.digests[recipientKey(recipient)] = {
-              at: this.now(),
-              signature,
-            };
-            this.state.digestRequested = this.state.digestRequested?.filter(
-              (k) => k !== recipientKey(recipient),
-            );
-            this.save();
             if (choices.length)
-              await this.sendButtons(
-                choices[0],
-                `${choices.length} practice cases are queued.\nQuick reviews are listed first; investigation and external follow-up come later. This is guidance, not a guarantee of completion.\nPick one below; I won’t send the whole backlog.\n\nSend /pause to stop new notifications.`,
-                choices.map((d) => [
-                  this.button(
-                    d,
+              await this.sendQueue(
+                choices,
+                choices.map((d) =>
                     `${hints[d.caseId]?.label ?? "Needs investigation"} · ${summaries.find((s) => s.case_id === d.caseId)?.subject ?? d.caseId}`.slice(
                       0,
                       80,
                     ),
-                    "show",
-                    undefined,
-                    d.key,
-                  ),
-                ]),
+                ),
               );
             else
               await this.tell(
@@ -869,6 +889,12 @@ export class ReviewEngine {
                   this.dashboard +
                   "/cases",
               );
+            // Commit delivery only after Telegram accepts the queue. Failed sends
+            // retain the request/signature so the normal backoff can retry it.
+            this.state.digests[recipientKey(recipient)] = { at: this.now(), signature };
+            this.state.digestRequested = this.state.digestRequested?.filter(
+              (k) => k !== recipientKey(recipient),
+            );
           }
           this.save();
         }

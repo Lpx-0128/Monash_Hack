@@ -7,11 +7,15 @@ import {
   unlinkSync,
   readFileSync,
   writeFileSync,
+  renameSync,
   existsSync,
 } from "node:fs";
 import { dirname } from "node:path";
 import { ReviewApi } from "./api";
 import { ReviewEngine, type Recipient, type Button } from "./engine";
+import { VoiceService } from "./voice";
+import { TwilioProvider } from "./voice-provider";
+import { voiceApp } from "./voice-http";
 const required = (name: string) => {
   const v = process.env[name];
   if (!v) throw new Error(`Configure ${name} in the private environment file`);
@@ -34,6 +38,11 @@ const recipients = z
   .parse(JSON.parse(required("F2_RECIPIENTS"))) as Recipient[];
 const state = process.env.F2_STATE_FILE ?? ".local/f2-state.json";
 mkdirSync(dirname(state), { recursive: true });
+const enrollmentFile = state + ".recipients.json";
+if (process.env.HARBOR_HOSTED === "true" && existsSync(enrollmentFile)) {
+  const saved = z.array(z.strictObject({ actor: z.string().regex(/^\d{1,20}$/), chat: z.string().regex(/^\d{1,20}$/) })).max(99).parse(JSON.parse(readFileSync(enrollmentFile, "utf8")));
+  for (const r of saved) if (!recipients.some(x => x.actor === r.actor && x.chat === r.chat)) recipients.push(r);
+}
 // Fail closed for a live/reused PID; recover only a positively dead owner.
 if (existsSync(state + ".lock")) {
   const pid = Number(readFileSync(state + ".lock", "utf8"));
@@ -102,6 +111,85 @@ const engine = new ReviewEngine(
       }
     : undefined,
 );
+let voice: VoiceService | undefined;
+if (process.env.VOICE_ENABLED === "true") {
+  // V1 is deliberately pinned to the local simulator, not an arbitrary backend URL.
+  const base = required("F2_BACKEND_URL");
+  if (new URL(base).hostname !== "127.0.0.1")
+    throw new Error("V1 voice requires the local simulator");
+  const check = await fetch(base + "/api/demo/config");
+  const config = await check.json();
+  if (config.mode !== "synthetic" || config.contract !== "2.1.2")
+    throw new Error("V1 requires the v2.1.2 simulator");
+  const voiceToken = required("VOICE_BACKEND_TOKEN");
+  if (voiceToken.length < 32 || voiceToken === backend)
+    throw new Error("Use a distinct voice service credential");
+  const enrollment = z
+    .array(
+      z.strictObject({
+        actor: z.string(),
+        phone: z.string().regex(/^\+[1-9]\d{7,14}$/),
+        optedIn: z.boolean(),
+        outboundCaseId: z.string().optional(),
+      }),
+    )
+    .length(1)
+    .parse(JSON.parse(required("VOICE_ENROLLMENT")));
+  if (!recipients.some((r) => r.actor === enrollment[0].actor))
+    throw new Error("Voice actor must be an enrolled Telegram actor");
+  const providerMode = z
+    .enum(["standard", "trial", "trial-demo"])
+    .parse(process.env.VOICE_PROVIDER_MODE ?? "standard");
+  const skipDemoChallenge = process.env.VOICE_DEMO_SKIP_CHALLENGE === "true";
+  if (skipDemoChallenge && providerMode !== "trial-demo")
+    throw new Error("Demo handset access requires trial-demo mode");
+  const cap = z.coerce
+    .number()
+    .int()
+    .min(30)
+    .max(providerMode === "trial-demo" ? 600 : 180)
+    .parse(process.env.VOICE_CALL_SECONDS ?? 90);
+  const hour = z.coerce.number().int().min(0).max(23);
+  if (
+    providerMode === "trial-demo" &&
+    process.env.VOICE_TRIAL_DEMO_ACKNOWLEDGED !== "true"
+  )
+    throw new Error(
+      "Trial demo requires acknowledgment of capability authentication and application-only deadline",
+    );
+  const provider = new TwilioProvider(
+    required("TWILIO_ACCOUNT_SID"),
+    required("TWILIO_AUTH_TOKEN"),
+    required("TWILIO_FROM"),
+    required("VOICE_PUBLIC_URL"),
+    providerMode,
+    providerMode === "trial-demo" ? cap : 180,
+    process.env.VOICE_INBOUND_ENABLED === "true"
+      ? required("VOICE_INBOUND_KEY")
+      : undefined,
+  );
+  voice = new VoiceService(
+    process.env.VOICE_STATE_FILE ?? ".local/voice-state.json",
+    engine,
+    (a) => new ReviewApi(base, voiceToken, a, "VOICE"),
+    provider,
+    enrollment,
+    Date.now,
+    cap,
+    {
+      start: hour.parse(process.env.VOICE_QUIET_START ?? 22),
+      end: hour.parse(process.env.VOICE_QUIET_END ?? 8),
+    },
+    skipDemoChallenge,
+  );
+  voiceApp(voice, provider, provider.origin, (event) => {
+    // Fixed metadata only: never log caller numbers, URLs, credentials or speech.
+    console.info("Voice inbound diagnostic", JSON.stringify(event));
+  }).listen(
+    Number(process.env.VOICE_PORT ?? 5177),
+    "127.0.0.1",
+  );
+}
 const app = express();
 app.use(express.json({ limit: "32kb" }));
 app.post("/update", async (req, res) => {
@@ -125,7 +213,15 @@ app.post("/update", async (req, res) => {
     return;
   }
   try {
-    await engine.inbound(parsed.data);
+    const u = parsed.data;
+    if (process.env.HARBOR_HOSTED === "true" && u.text === "/start" && /^\d{1,20}$/.test(u.actor) && u.actor === u.chat && !recipients.some(r => r.actor === u.actor && r.chat === u.chat)) {
+      if (recipients.length >= 99) return void res.status(429).json({ error: "Enrollment capacity reached" });
+      const candidate = [...recipients, { actor: u.actor, chat: u.chat }];
+      writeFileSync(enrollmentFile + ".tmp", JSON.stringify(candidate.map(({ actor, chat }) => ({ actor, chat }))), { mode: 0o600 });
+      renameSync(enrollmentFile + ".tmp", enrollmentFile);
+      recipients.push({ actor: u.actor, chat: u.chat });
+    }
+    if (!(await voice?.approve(parsed.data))) await engine.inbound(parsed.data);
     res.json({ ok: true });
   } catch {
     res.status(503).json({ error: "Interaction service unavailable" });
@@ -136,6 +232,11 @@ let failures = 0;
 async function poll() {
   try {
     await engine.tick();
+    try {
+      await voice?.tick();
+    } catch {
+      console.error("Voice unavailable; Telegram remains active.");
+    }
     failures = 0;
   } catch {
     failures++;

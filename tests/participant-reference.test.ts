@@ -22,7 +22,7 @@ test("AC-17: source without receipt maps to a valid processing Case without gues
   };
   const before = structuredClone(source);
   const c = mapParticipantToCase(source, mappingContext());
-  assert.equal(c.schema_version, "2.1.1");
+  assert.equal(c.schema_version, "2.1.2");
   assert.equal(c.email.received_at, null);
   assert.equal(c.workflow_status, "PROCESSING");
   assert.equal(c.review, null);
@@ -88,7 +88,7 @@ test("AC-19: replay preserves source absence and creation time while advancing c
     const done = s.get(id);
     assert.equal(done.email.received_at, old.email.received_at);
     assert.equal(done.created_at, old.created_at);
-    assert.equal(done.schema_version, "2.1.1");
+    assert.equal(done.schema_version, "2.1.2");
   }
 });
 test("Every synthetic source follows the five-key participant shape and is explicitly fictional", () => {

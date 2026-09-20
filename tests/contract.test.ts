@@ -10,7 +10,7 @@ test("Every required fixture passes wire/invariant validation and exact source a
   for (const [s] of scenarios) {
     const docs = new Map<string, string>();
     const c = makeFixture(s, docs);
-    assert.equal(validateCase(c).schema_version, "2.1.1", s);
+    assert.equal(validateCase(c).schema_version, "2.1.2", s);
     auditDocuments(c, docs);
   }
 });

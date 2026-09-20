@@ -4,6 +4,9 @@
   "private": true,
   "type": "module",
   "scripts": {
+    "dev:v1": "tsx --env-file=.local/f2.env --env-file=.local/voice.env server/index.ts --dev",
+    "start:v1": "tsx --env-file=.local/f2.env --env-file=.local/voice.env interaction/index.ts",
+    "test:voice": "tsx --test tests/voice.test.ts",
     "dev:f2": "tsx --env-file=.local/f2.env server/index.ts --dev",
     "start:f2": "tsx --env-file=.local/f2.env interaction/index.ts",
     "dev": "tsx server/index.ts --dev",

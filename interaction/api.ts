@@ -19,6 +19,7 @@ export class ReviewApi {
     public base: string,
     private token: string,
     public actor: string,
+    private channel: "TELEGRAM" | "VOICE" = "TELEGRAM",
   ) {}
   async request(path: string, body?: unknown) {
     const r = await fetch(this.base + "/api/v1" + path, {
@@ -27,7 +28,8 @@ export class ReviewApi {
       signal: AbortSignal.timeout(10000),
       headers: {
         Authorization: `Bearer ${this.token}`,
-        "X-Telegram-Actor": this.actor,
+        [this.channel === "VOICE" ? "X-Voice-Actor" : "X-Telegram-Actor"]:
+          this.actor,
         "Content-Type": "application/json",
       },
       body: body === undefined ? undefined : JSON.stringify(body),

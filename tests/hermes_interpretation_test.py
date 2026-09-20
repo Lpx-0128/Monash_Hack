@@ -30,4 +30,17 @@ for invalid in [{**payload,'actor_id':'spoofed'},{**payload,'text':'x'*2001},{**
     except ValueError: pass
     else: raise AssertionError('Invalid context accepted')
 assert len(calls)==1
+os.environ['F3_PROVIDER']='azure-foundry'
+def azure(provider, model):
+    assert provider == 'azure-foundry'
+    return Client(), model
+assert module.interpret(payload,azure)=={'status':'CLARIFY'}
+try: module.interpret(payload,lambda *_: (None,None))
+except RuntimeError: pass
+else: raise AssertionError('Missing Azure provider must fail without fallback')
+os.environ['F3_PROVIDER']='unexpected'
+try: module.interpret(payload,azure)
+except RuntimeError: pass
+else: raise AssertionError('Unknown provider accepted')
+os.environ.pop('F3_PROVIDER')
 print('PASS: explicit Copilot route, bounded tool-free call, scoped context and invalid-request rejection; model transport mocked.')

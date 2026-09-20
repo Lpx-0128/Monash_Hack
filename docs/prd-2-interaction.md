@@ -1,20 +1,26 @@
 # PRD 2 — Interaction / Frontend Layer
 
-**Version:** 2.1.1-aligned · 19 September 2026
+**Version:** v2.1.2 target-aligned · 20 September 2026
 
-**Authority:** [Shared System Contract v2.1.1](./shared-system-contract.md) defines all data, review, decision, state, API, and access semantics.
+**Status:** Documentation updated; runtime adoption of v2.1.2 remains coordinated under Shared Contract §7.3. Existing F0–F4 work and deployed v2.1.1 behavior remain valid until that migration.
+
+**Authority:** [Shared System Contract v2.1.2](./shared-system-contract.md) defines all data, review, decision, state, API, and access semantics.
 
 **Companion:** [PRD 1 — Backend Automation & Intelligence Layer](./prd-1-backend.md)
 
+**Voice extension:** [PRD 3 — Voice & Attention Orchestration Layer](./prd-3-voice-attention.md) owns bidirectional calling and channel-selection policy. This PRD owns the shared interaction service and its Telegram/dashboard integration.
+
 **Owner:** C — Interaction + Submission; B supports APIs/access; A supports evidence.
 
-**Selected Telegram framework:** Nous Research Hermes Agent. This is an interaction-layer implementation choice under Shared Contract v2.1.1; it does not change the shared API or backend ownership. Pin the tested Hermes release/commit during F2 setup.
+**Selected Telegram framework:** Nous Research Hermes Agent. This is an interaction-layer implementation choice preserved under Shared Contract v2.1.2; it does not change the shared API or backend ownership. Pin the tested Hermes release/commit during F2 setup.
 
 ## 1. Objective, USP, and UX philosophy
 
 Deliver a responsive dashboard and proactive Telegram experience so shipping staff do not have to watch a workflow continuously. The system contacts the right person when a decision, correction, or external action is needed.
 
-**“Don’t monitor AI. Let it chase you.”**
+**“Don’t monitor AI. Let AI chase you — and when you need AI, just call it.”**
+
+PRD 3 extends this experience to voice-first, screen-optional interaction. Telegram remains the text/document/evidence surface and the dashboard remains independently capable of every supported review. Voice availability is a separate gate, not a new dependency of this PRD’s MUST completion.
 
 Use the simplest safe interaction:
 
@@ -56,11 +62,11 @@ Natural-language Telegram AI interpretation; improved explanations; useful live 
 
 ### OPTIONAL / stretch
 
-Evidence crops/images, voice input/output, WhatsApp, browser replacement uploads, streaming updates, richer animations. Voice/WhatsApp must eventually use the same structured backend decision boundary.
+Evidence crops/images, WhatsApp, browser replacement uploads, streaming updates, richer animations. WhatsApp must eventually use the same structured backend decision boundary. Voice is specified separately in PRD 3, with its own implementation and release gates.
 
 ### Out of scope / high-risk distractions
 
-3D “Jarvis” decoration, multi-channel orchestration frameworks, autonomous business emails, general chat assistant behavior, public access to organizer EVAL data, and a claim that every exception can be solved by phone.
+3D “Jarvis” decoration, unnecessary orchestration frameworks beyond the bounded PRD 3 attention policy, autonomous business emails, general chat assistant behavior, public access to organizer EVAL data, and a claim that every exception can be solved by phone.
 
 ## 3. Core user journeys
 
@@ -240,7 +246,7 @@ Natural-language AI is SHOULD. If implemented, it returns only a structured prop
 
 Examples such as “I think the BL says twenty-one thousand seven hundred and seven kilos” may produce a proposed 21707 kg, but require explicit preview/confirmation. “Use the second one” is valid only when the review has an explicit ordered candidate list and the intended option is unambiguous.
 
-If interpretation is uncertain, ask a focused clarification or show buttons/input. Do not invent a value, case, side, or review. Keep voice and unrestricted conversation outside MVP.
+If interpretation is uncertain, ask a focused clarification or show buttons/input. Do not invent a value, case, side, or review. Keep unrestricted conversation outside MVP. Voice is a separately gated extension under PRD 3; it is not a hidden dependency of F3 or the existing Telegram/dashboard MVP.
 
 ## 9. Proactive discovery, delivery, and flood control
 
@@ -266,6 +272,16 @@ A digest does not mark individual reviews notified. It offers case selection, an
 Delivery order: send → persist message mapping/delivery → POST notified. Persisting a successful send lets restart retry only the marker when appropriate. A crash before send acknowledgment persistence may cause a duplicate; accept this documented limitation. Backend decision atomicity prevents duplicate application.
 
 If a backend response is lost, query case state before retrying a decision. Delivery recovery must not cause automatic retries of reprocess.
+
+### 9.1 Shared integration with PRD 3
+
+Reuse one interaction service for authenticated actor/scope resolution, case/review/run bindings, proposal construction, exact confirmation, API submission and outcome reconciliation. PRD 3's provider adapter calls these operations; it must not write backend storage or implement a competing decision engine. Hermes remains the sole Telegram inbound consumer. Evidence handoff uses the existing authorized Telegram delivery path and actual source locator.
+
+The existing notifier is the single delivery coordinator. PRD 3 supplies a bounded channel-selection policy and per-channel call-attempt records. Telegram remains the default/fallback review delivery; notified_at is marked only after individual Telegram review-message delivery under Contract §10.1. A call or inbox summary must not set that marker. Do not rely only on notified=false when considering voice follow-up.
+
+Persist pending voice proposals and outcomes through the shared service; include channel-specific identifiers locally without changing business wire shapes. Voice versus Telegram/dashboard races use the backend's existing first-acceptance-wins behavior. Defer is not ACKNOWLEDGE. Current state is refetched before submission; a stale voice confirmation never migrates into the next review.
+
+Real voice submission is disabled until the v2.1.2 backend and clients are deployed and PRD 3 acceptance passes. Do not disguise VOICE as TELEGRAM. Read-only/proposal-only experiments remain explicitly labelled.
 
 ## 10. Frontend state and API consumption
 
@@ -314,7 +330,7 @@ Read the official problem statement and participant README and inspect represent
 
 Build clearly labelled synthetic fixtures reflecting observed multiline addresses, equivalent field labels, container expressions, weight formatting, and supported document formats. Keep their documents and evidence internally consistent. Include both explicitly fictional known receipt times and received_at=null in processing and settled cases. Participant-derived records must retain null where the source supplies no time. Do not use sample_submission.json placeholders as expected classification results.
 
-F0 uses a stateful, deterministic simulated backend behind the API adapter, with resettable scenarios and observable processing updates. Emit schema_version="2.1.1" throughout and validate against the same shared schema; do not maintain a provisional timestamp schema. Missing source receipt time no longer requires a blocking mapper discrepancy after this amendment is adopted.
+F0 uses a stateful, deterministic simulated backend behind the API adapter, with resettable scenarios and observable processing updates. During the coordinated v2.1.2 rollout, emit schema_version="2.1.2" throughout and validate against the same shared schema; preserve v2.1.1 on the existing deployment until that rollout and do not maintain a provisional timestamp schema. Missing source receipt time has been valid since v2.1.1; the voice amendment does not change that rule.
 
 F0 covers the shell, viewing, navigation/filtering, valid fixtures, loading/error states, and simulated processing. Full decision submission and confirmation journeys remain F1. Simulator acceptance and real-backend acceptance are separate milestones: neither simulation nor representative fixture design proves participant-data extraction accuracy. Private real-data processing and integration checks remain necessary later; no real dataset needs to be exposed publicly to complete F0.
 
@@ -363,12 +379,14 @@ F0 proceeds alongside B0. F1/F2 basic review handling integrates immediately aft
 
 | Phase | Work | Deliverables and exit criteria |
 |---|---|---|
-| **F0 — Deployed shell and valid mocks (MUST)** | Participant structure review; API adapter; stateful simulator; synthetic source documents; three-screen responsive structure; v2.1.1 validator; safe hosting/proxy setup | Deployed dashboard renders all contract mock states, including null classification and known/unknown receipt time; resettable scenarios; no guessed timestamps or private token in browser |
+| **F0 — Deployed shell and valid mocks (MUST)** | Participant structure review; API adapter; stateful simulator; synthetic source documents; three-screen responsive structure; target v2.1.2 validator after coordinated adoption; safe hosting/proxy setup | Deployed dashboard renders all contract mock states, including null classification and known/unknown receipt time; resettable scenarios; no guessed timestamps or private token in browser |
 | **F1 — Dashboard review flow (MUST)** | All widgets; raw/evidence/provenance views; machine vs operational status; exact override confirmation; error/refetch behavior | Every review mode works on mocks and then a real backend Case; dashboard alone completes a review |
 | **F2 — Hermes setup and early handshake (MUST)** | Pin Hermes version; configure dedicated profile, bot and allowlist; implement shipping-review integration; prove callbacks, explicit reply routing, file delivery, persistent mappings, and bound confirmations | Simulator handshake first; then real backend review → Hermes Telegram message → accepted decision → backend resumption → dashboard update; durable acceptance visible |
 | **F2 completion — Proactive reliability (MUST)** | One Hermes inbound consumer and one backend notifier; delivery/update records; flood limits/digest; mismatch/operator notices; stale-run, session-reset, and process-restart behavior | Sequential/race/stale/restart tests pass; Hermes reset cannot lose domain routing; digest does not mark individual delivery; public EVAL access denied |
 | **F3 — Hermes interpretation improvements (SHOULD)** | Optional natural-language interpretation through Hermes; structured proposals; ambiguity handling; test set; useful real pipeline view | Measured interpretation results; no automatic ambiguous/wrong-target actions; MUST paths remain deterministic and usable |
 | **F4 — Rehearsal and submission (MUST)** | Full real integration, replay, responsive checks, safe fixture labels, video/script, README/slides/link checks | Repeatable live flow and backup recording; validated scoped metrics; all submission links work; no mock-only core demonstration |
+
+PRD 3 milestones V0–V3 run as a separate extension. F0–F4 retain their existing exit criteria; add voice-specific rehearsal to F4 only when V2 real-backend integration has passed. Simulator/adapter work can proceed independently, but actual voice acceptance cannot be claimed before backend integration.
 
 Manual-override confirmation belongs in F1 and F2, not deferred to F3. If F3 is skipped, the MVP remains complete through buttons, explicit values, and confirmation.
 
@@ -405,7 +423,7 @@ The interaction MVP is done when:
 
 C coordinates the public prototype, repository, technical documentation, architecture explanation, demo video, and final link checks. Use distinct evidence for architecture, working core, technology integration, validation, problem understanding, innovation, and practical value rather than repeating one screenshot for every rubric item.
 
-The pitch explains proactive attention, honest external blocks, and deterministic/AI/human responsibilities. It uses measured counts and explicit limitations. Optional future work includes a real mailbox adapter, OCR/vision, WhatsApp, voice, and controlled source replacement; these must retain the same backend-owned decision contract.
+The pitch explains proactive attention, honest external blocks, and deterministic/AI/human responsibilities. It uses measured counts and explicit limitations. Optional future work includes a real mailbox adapter, OCR/vision, WhatsApp, and controlled source replacement; these must retain the same backend-owned decision contract.
 
 ## 17. Changes from the prior PRD
 
@@ -414,6 +432,8 @@ Natural-language AI is consistently SHOULD. Manual confirmation moves into the e
 **Framework selection update:** Hermes Agent is now the required Telegram gateway/agent runtime. F2 adds the shipping-review integration and a version-specific feasibility check; F3 may use Hermes for natural-language proposals. F0 remains independently implementable with the simulated backend. The shared contract and PRD 1 remain framework-independent.
 
 **v2.1.1 data-alignment update:** Adopt nullable receipt time, preserve system timestamp meanings, and test both timestamp variants. Ground F0 synthetic fixtures in observed participant structures while retaining the simulator boundary. This supersedes the temporary timestamp-blocking workaround and any proposed provisional simulator schema. Hermes selection and the existing F1/F2 integration requirements remain in force.
+
+**v2.1.2 voice integration update:** PRD 3 owns bidirectional calling and attention policy. This PRD supplies the shared authenticated interaction service, existing notifier, Telegram evidence and fallback. The backend remains authoritative. Canonical documents target v2.1.2; deployment, team approval and voice acceptance remain pending.
 
 ## 18. Hermes reference documentation
 

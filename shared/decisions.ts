@@ -14,7 +14,7 @@ export const overrideSchema = z.strictObject({
 const base = {
   review_id: id,
   run_id: id,
-  channel: z.enum(["DASHBOARD", "TELEGRAM"]),
+  channel: z.enum(["DASHBOARD", "TELEGRAM", "VOICE"]),
   actor_id: id,
   user_message: z.string().optional(),
 };

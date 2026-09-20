@@ -37,7 +37,7 @@ import {
   statuses,
   workflows,
 } from "../shared/validation";
-import { api, demoControl, isSimulation, type Filters } from "./api";
+import { api, demoControl, isSimulation, hostedDeployment, readOnlySample, type Filters } from "./api";
 import { usePoll } from "./usePoll";
 import { participantEmailSchema } from "../shared/participant-mapping";
 
@@ -210,10 +210,18 @@ export function App({
   initialFault = "none",
   initialDecisionFault = "none",
   sharedTelegramDemo = false,
+  hosted = false,
+  telegramUrl,
+  sample = false,
+  datasetSize,
 }: {
   initialFault?: string;
   initialDecisionFault?: string;
   sharedTelegramDemo?: boolean;
+  hosted?: boolean;
+  telegramUrl?: string;
+  sample?: boolean;
+  datasetSize?: number;
 }) {
   const path = useRoute(),
     [refresh, setRefresh] = useState(0),
@@ -291,7 +299,9 @@ export function App({
           </strong>
           <p>
             {isSimulation
-              ? sharedTelegramDemo
+              ? hosted
+                ? "Saved mock workspaces linked to Telegram. Processing outcomes are simulated."
+                : sharedTelegramDemo
                 ? "Synthetic documents. Shared Telegram demo. No real shipments."
                 : "Synthetic documents. Isolated demo session. No real shipments."
               : "Server-authorized cases only."}
@@ -310,7 +320,8 @@ export function App({
               <span />
               {isSimulation ? "SYNTHETIC DEMO" : "LIVE API"}
             </span>
-            {isSimulation && (
+            {telegramUrl && <a className="button primary" href={telegramUrl} target="_blank" rel="noopener noreferrer">Continue in Telegram</a>}
+            {isSimulation && !hosted && (
               <button
                 className="button quiet"
                 aria-expanded={controls}
@@ -325,7 +336,8 @@ export function App({
             </span>
           </div>
         </header>
-        {controls && (
+        {hosted && <div className="notice warning" role="note"><div><strong>{sample ? "Sample dashboard" : "Your mock workspace"}{datasetSize ? ` · ${datasetSize} emails` : ""}</strong><p>Organiser correspondence with simulated processing and generated practice documents. Outcomes are not organiser answers. {sample ? "Continue in Telegram, then open its dashboard link to save your own progress." : "Your decisions are saved to your Telegram identity."}</p></div></div>}
+        {controls && !hosted && (
           <section className="demo-controls" aria-label="Demo controls">
             <div>
               <strong>Simulation controls</strong>
@@ -454,7 +466,9 @@ export function App({
           <span>
             {sharedTelegramDemo ? "F2" : "F1"} ·{" "}
             {isSimulation
-              ? sharedTelegramDemo
+              ? hosted
+                ? "Organiser inbox · simulated processing · Azure AI interpretation in Telegram."
+                : sharedTelegramDemo
                 ? "Shared synthetic demo. Telegram delivery requires the authorized gateway. No real AI extraction."
                 : "Predefined simulation. No AI extraction or notifications run."
               : "Live API adapter. Review actions available in F1."}
@@ -502,7 +516,9 @@ function Overview({ refresh, retry }: { refresh: number; retry: () => void }) {
               : "Current authorized scope."}
           </strong>{" "}
           {isSimulation
-            ? "Every case and document is synthetic. Review actions use simulated grounding and processing."
+            ? hostedDeployment
+              ? "Original organiser emails with simulated outcomes and generated practice evidence. Review counts are illustrative."
+              : "Every case and document is synthetic. Review actions use simulated grounding and processing."
             : "Showing data from the configured API."}
         </div>
       </div>
@@ -933,7 +949,7 @@ function Cases({
           <h1>All cases</h1>
           <p>Inspect the evidence. Understand the next step.</p>
         </div>
-        {isSimulation && (
+        {isSimulation && !hostedDeployment && (
           <button
             className="primary"
             disabled={createBusy}
@@ -1145,10 +1161,10 @@ function Detail({
                 {date(c.updated_at)}
               </p>
             </div>
-            <button onClick={() => void replay()} disabled={pending}>
+            {!hostedDeployment && <button onClick={() => void replay()} disabled={pending}>
               <RefreshCw size={16} aria-hidden="true" />
               {pending ? "Starting run…" : "Replay / Reprocess"}
-            </button>
+            </button>}
           </div>
           <div className="run-strip">
             <Badge value={c.workflow_status} />
@@ -1234,9 +1250,10 @@ function Detail({
           </div>
           <div className={`review-workspace ${c.review ? "has-decision" : ""}`}>
             <div className="decision-column">
-              {c.review && (
+              {c.review && !readOnlySample && (
                 <ReviewPanel c={c} onCase={replace} onBusy={setPending} />
               )}{" "}
+              {c.review && readOnlySample && <p className="notice">Continue in Telegram to review this dataset in your saved workspace.</p>}
               {c.follow_up === "CORRECTION_REQUIRED" && (
                 <div className="notice warning">
                   <TriangleAlert size={21} aria-hidden="true" />
@@ -1424,15 +1441,16 @@ function SyntheticEmailContext({ c }: { c: Case }) {
     .reverse()
     .find((h) => h.run_id === c.run.run_id && h.details?.source_email)?.details;
   const source = participantEmailSchema.safeParse(context?.source_email);
+  const organiser = context?.outcome_provenance === "SIMULATED_NOT_GROUND_TRUTH";
   return (
     <Panel
-      title="Synthetic email context"
-      subtitle="Participant-shaped correspondence, independently authored for this demo."
+      title={organiser ? "Organiser email context" : "Synthetic email context"}
+      subtitle={organiser ? "Original correspondence. Review outcomes and practice evidence are simulated, not extracted from these attachments." : "Participant-shaped correspondence, independently authored for this demo."}
     >
       <div className="email-context">
         <p>
           <strong>Participant receipt time is unavailable.</strong> Contract
-          v2.1.1 preserves absent receipt time as null without blocking intake.
+          v2.1.2 preserves absent receipt time as null without blocking intake.
           Any known receipt time in this demo is explicitly fictional. Case
           creation and update times describe system activity, never email
           receipt.
@@ -1453,7 +1471,7 @@ function SyntheticEmailContext({ c }: { c: Case }) {
         {source.success && (
           <>
             <details>
-              <summary>Read synthetic email body</summary>
+              <summary>{organiser ? "Read organiser email body" : "Read synthetic email body"}</summary>
               <pre tabIndex={0} aria-label="Synthetic email body">
                 {source.data.body}
               </pre>

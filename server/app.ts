@@ -11,12 +11,16 @@ import { randomUUID } from "node:crypto";
 import { z } from "zod";
 import { ApiError, DemoStore, statistics, summary } from "./store";
 import { categories, statuses, workflows } from "../shared/validation";
+import type { ParticipantEmail } from "../shared/participant-mapping";
 
 /** Each browser receives a server-issued, DEMO-only guest session. No actor from JSON is trusted. */
 export function createApp(
   options: {
     stateFile?: string;
+    dataset?: ParticipantEmail[];
+    hosted?: { telegramUrl: string };
     interaction?: { token: string; actors: string[] };
+    voice?: { token: string; actors: string[] };
   } = {},
 ) {
   const app = express();
@@ -24,7 +28,7 @@ export function createApp(
   if (options.stateFile && existsSync(options.stateFile)) {
     const saved = JSON.parse(readFileSync(options.stateFile, "utf8"));
     for (const [token, data] of saved) {
-      const store = new DemoStore();
+      const store = new DemoStore(options.dataset);
       store.restore(data.store);
       sessions.set(token, { store, touched: data.touched });
     }
@@ -47,39 +51,38 @@ export function createApp(
   app.use(express.json({ limit: "16kb" }));
   app.use((_req, res, next) => {
     res.setHeader("X-Content-Type-Options", "nosniff");
-    res.setHeader("Referrer-Policy", "same-origin");
+    res.setHeader("Referrer-Policy", options.hosted ? "no-referrer" : "same-origin");
     next();
   });
   app.get(["/health", "/ready"], (_req, res) => res.json({ status: "ok" }));
   app.use("/api", (req, res, next) => {
     res.locals.channel = "DASHBOARD";
     if (req.headers.authorization) {
-      const actor = req.header("X-Telegram-Actor");
+      const isVoice = req.header("X-Voice-Actor") !== undefined;
+      const service = isVoice ? options.voice : options.interaction;
+      const actor = req.header(isVoice ? "X-Voice-Actor" : "X-Telegram-Actor");
       if (
-        !options.interaction ||
-        req.headers.authorization !== `Bearer ${options.interaction.token}`
+        !service ||
+        req.headers.authorization !== `Bearer ${service.token}` ||
+        (isVoice && req.header("X-Telegram-Actor") !== undefined)
       )
-        return res
-          .status(401)
-          .json({
-            error: {
-              code: "UNAUTHORIZED",
-              message: "Invalid service credential.",
-            },
-          });
-      if (!actor || !options.interaction.actors.includes(actor))
-        return res
-          .status(403)
-          .json({
-            error: {
-              code: "FORBIDDEN",
-              message: "Actor is outside authorized scope.",
-            },
-          });
-      res.locals.channel = "TELEGRAM";
+        return res.status(401).json({
+          error: {
+            code: "UNAUTHORIZED",
+            message: "Invalid service credential.",
+          },
+        });
+      if (!actor || !(service.actors.includes(actor) || (!isVoice && options.hosted && /^\d{1,20}$/.test(actor))))
+        return res.status(403).json({
+          error: {
+            code: "FORBIDDEN",
+            message: "Actor is outside authorized scope.",
+          },
+        });
+      res.locals.channel = isVoice ? "VOICE" : "TELEGRAM";
       res.locals.actor = actor;
     }
-    if (req.method !== "GET" && req.headers.origin) {
+    if (!options.hosted && req.method !== "GET" && req.headers.origin) {
       const origin = new URL(req.headers.origin);
       if (origin.host !== req.headers.host)
         return res.status(403).json({
@@ -92,15 +95,24 @@ export function createApp(
     const cookies = Object.fromEntries(
       (req.headers.cookie ?? "").split(";").map((v) => v.trim().split("=")),
     );
-    let session = options.interaction
-      ? sessions.get("shared-f2-demo")
-      : cookies.harbor_demo
-        ? sessions.get(cookies.harbor_demo)
-        : undefined;
+    const hostedKey = options.hosted ? `hosted:${res.locals.actor ?? res.locals.hostedActor ?? "sample"}` : undefined;
+    if (options.hosted && req.method !== "GET" && !res.locals.actor && res.locals.hostedActor === "sample")
+      return res.status(403).json({ error: { code: "FORBIDDEN", message: "Continue in Telegram to review your cases." } });
+    if (options.hosted && req.path.startsWith("/demo/") && req.path !== "/demo/config")
+      return res.status(404).json({ error: { code: "NOT_FOUND", message: "Endpoint unavailable." } });
+    let session = hostedKey ? sessions.get(hostedKey) :
+      options.interaction || options.voice
+        ? sessions.get("shared-f2-demo")
+        : cookies.harbor_demo
+          ? sessions.get(cookies.harbor_demo)
+          : undefined;
     if (!session) {
-      const token = options.interaction ? "shared-f2-demo" : randomUUID();
-      session = { store: new DemoStore(), touched: Date.now() };
+      const token = hostedKey ?? (options.interaction || options.voice ? "shared-f2-demo" : randomUUID());
+      if (options.hosted && sessions.size >= 100)
+        return res.status(429).json({ error: { code: "RATE_LIMITED", message: "Workspace capacity reached." } });
+      session = { store: new DemoStore(options.dataset), touched: Date.now() };
       sessions.set(token, session);
+      if (options.hosted) persist();
       res.cookie("harbor_demo", token, {
         httpOnly: true,
         sameSite: "strict",
@@ -111,7 +123,7 @@ export function createApp(
     }
     session.touched = Date.now();
     res.locals.store = session.store;
-    res.locals.actor ??= "demo-guest";
+    res.locals.actor ??= options.hosted ? res.locals.hostedActor : "demo-guest";
     res.setHeader("Cache-Control", "no-store");
     next();
   });
@@ -119,11 +131,15 @@ export function createApp(
   app.get("/api/demo/config", (_req, res) =>
     res.json({
       mode: "synthetic",
-      contract: "2.1.1",
+      contract: "2.1.2",
       milestone: options.interaction ? "F2" : "F1",
       actor_id: "demo-guest",
       decision_fault: store(res).decisionFault,
       fault: store(res).fault,
+      hosted: !!options.hosted,
+      telegram_url: options.hosted?.telegramUrl,
+      sample: options.hosted ? res.locals.actor === "sample" : false,
+      dataset_size: options.dataset?.length,
     }),
   );
   app.post("/api/demo/reset", (req, res) => {
@@ -332,7 +348,7 @@ export function createApp(
   );
   const timer = setInterval(() => {
     for (const [token, s] of sessions) {
-      if (token !== "shared-f2-demo" && Date.now() - s.touched > 7200000)
+      if (!options.hosted && token !== "shared-f2-demo" && Date.now() - s.touched > 7200000)
         sessions.delete(token);
       else if (
         [...s.store.jobs.values()].some((job) => job.due <= Date.now())

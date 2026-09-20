@@ -25,7 +25,7 @@ export function mapParticipantToCase(
 ): Case {
   const source = intakeSchema.parse(input);
   return validateCase({
-    schema_version: "2.1.1",
+    schema_version: "2.1.2",
     case_id: source.email_id,
     run: context.run,
     email: {

@@ -32,7 +32,7 @@ test("HTTP boundary: scope, filters, sessions, documents, replay, reset and scop
     assert.equal((await get("/health")).status, 200);
     assert.equal(
       (await (await get("/api/demo/config")).json()).contract,
-      "2.1.1",
+      "2.1.2",
     );
     const list = await (await get("/api/v1/cases")).json();
     assert.equal(list.length, 23);
