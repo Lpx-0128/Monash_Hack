@@ -297,7 +297,18 @@ def map_db_to_schema(db_case: models.CaseModel) -> schemas.Case:
         "created_at": db_case.created_at,
         "updated_at": db_case.updated_at,
         "completed_at": db_case.completed_at,
-        "run": copy.deepcopy(db_case.run),
+        "run": (
+            {
+                "run_id": db_case.run.get("run_id", "run_default"),
+                "kind": db_case.run.get("kind", "DEMO"),
+                "started_at": db_case.run.get("started_at", db_case.created_at),
+                "input_version": db_case.run.get("input_version", "v1"),
+                "config_version": db_case.run.get("config_version", "v1"),
+                "demo_safe": db_case.run.get("demo_safe", True),
+            }
+            if isinstance(db_case.run, dict)
+            else db_case.run
+        ),
         "email": copy.deepcopy(db_case.email),
         "documents": copy.deepcopy(db_case.documents) if db_case.documents else [],
         "fields": copy.deepcopy(db_case.fields_data) if db_case.fields_data else [],

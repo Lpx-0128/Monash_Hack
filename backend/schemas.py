@@ -378,6 +378,17 @@ class CreateCaseRequest(BaseModel):
     email_id: str
 
 
+class BatchCreateCasesRequest(BaseModel):
+    email_ids: List[str]
+
+
+class BatchCreateCasesResponse(BaseModel):
+    total_requested: int
+    created: int
+    existing: int
+    case_ids: List[str]
+
+
 class CaseSummary(BaseModel):
     case_id: str
     run_id: str

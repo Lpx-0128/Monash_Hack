@@ -22,7 +22,8 @@ env/
 # Test / scratch artefacts
 submission.json
 export_*.json
-manifest_*.json
+manifest*.json
+validation_report.*
 
 # IDE
 .vscode/

@@ -165,6 +165,38 @@ def create_case(
     return case
 
 
+@api_router.post("/cases/batch", response_model=schemas.BatchCreateCasesResponse, status_code=status.HTTP_202_ACCEPTED)
+def batch_create_cases(
+    req: schemas.BatchCreateCasesRequest,
+    x_run_kind: Optional[str] = Header(None, alias="X-Run-Kind"),
+    db: Session = Depends(get_db)
+):
+    run_kind = _get_caller_scope(x_run_kind)
+    created_count = 0
+    existing_count = 0
+    case_ids = []
+
+    for email_id in req.email_ids:
+        email_id = str(email_id).strip()
+        if not email_id:
+            continue
+        db_case = crud.get_case(db, case_id=email_id)
+        if db_case:
+            existing_count += 1
+            case_ids.append(email_id)
+        else:
+            crud.create_case_with_job(db, email_id, run_kind=run_kind)
+            created_count += 1
+            case_ids.append(email_id)
+
+    return schemas.BatchCreateCasesResponse(
+        total_requested=len(req.email_ids),
+        created=created_count,
+        existing=existing_count,
+        case_ids=case_ids
+    )
+
+
 @api_router.get("/cases/{case_id}", response_model=schemas.Case)
 def read_case(
     case_id: str,
@@ -346,28 +378,35 @@ def submit_decision(
             detail={"code": schemas.ErrorCode.STALE_RUN.value, "message": "Stale run ID", "current_case": case_dict}
         )
 
-    # Action validation
-    if req.action not in schema_case.review.allowed_actions:
-        raise HTTPException(
-            status_code=422,
-            detail=schemas.ErrorCode.ACTION_NOT_ALLOWED.value
-        )
+    # Escape routes: NONE_OF_THESE for CHOICE, or "I can't tell" for VALUE_INPUT terminate in BLOCKED_EXTERNAL (Contract §5)
+    is_escape = (
+        (req.action == schemas.DecisionAction.SELECT_OPTION and req.option_id == "NONE_OF_THESE")
+        or (req.user_message and req.user_message.strip().lower() in ("i can't tell", "i cant tell", "cannot tell"))
+    )
 
-    # Specific action checks
-    if req.action == schemas.DecisionAction.SELECT_OPTION:
-        valid_options = [opt.option_id for opt in schema_case.review.options] if schema_case.review.options else []
-        if req.option_id not in valid_options:
+    # Action validation (unless user is using an authorized escape route)
+    if not is_escape:
+        if req.action not in schema_case.review.allowed_actions:
             raise HTTPException(
                 status_code=422,
-                detail=schemas.ErrorCode.OPTION_NOT_FOUND.value
+                detail=schemas.ErrorCode.ACTION_NOT_ALLOWED.value
             )
 
-    if req.action == schemas.DecisionAction.PROVIDE_VALUE:
-        if req.value is None or str(req.value).strip() == "":
-            raise HTTPException(
-                status_code=422,
-                detail=schemas.ErrorCode.INVALID_VALUE.value
-            )
+        # Specific action checks
+        if req.action == schemas.DecisionAction.SELECT_OPTION:
+            valid_options = [opt.option_id for opt in schema_case.review.options] if schema_case.review.options else []
+            if req.option_id not in valid_options:
+                raise HTTPException(
+                    status_code=422,
+                    detail=schemas.ErrorCode.OPTION_NOT_FOUND.value
+                )
+
+        if req.action == schemas.DecisionAction.PROVIDE_VALUE:
+            if req.value is None or str(req.value).strip() == "":
+                raise HTTPException(
+                    status_code=422,
+                    detail=schemas.ErrorCode.INVALID_VALUE.value
+                )
 
     # Override confirmation validation
     if req.override_confirmation:
@@ -424,10 +463,33 @@ def submit_decision(
         )
     )
 
-    # ACKNOWLEDGE transitions case to BLOCKED_EXTERNAL without background job
-    if req.action == schemas.DecisionAction.ACKNOWLEDGE:
+    # Escape routes: NONE_OF_THESE or "I can't tell" terminate in BLOCKED_EXTERNAL (Contract §5)
+    is_escape = (
+        (req.action == schemas.DecisionAction.SELECT_OPTION and req.option_id == "NONE_OF_THESE")
+        or (req.user_message and req.user_message.strip().lower() in ("i can't tell", "i cant tell", "cannot tell"))
+    )
+
+    # Review budget check: at most 2 accepted decisions per field per run
+    target_field = req.field or (schema_case.review.field if schema_case.review else None)
+    prior_field_decisions = 0
+    if target_field:
+        for ev in schema_case.history:
+            if ev.type == schemas.HistoryEventType.DECISION_APPLIED.value and ev.run_id == schema_case.run.run_id:
+                if ev.details and ev.details.get("field") == target_field.value:
+                    prior_field_decisions += 1
+
+    budget_exhausted = (prior_field_decisions >= 2)
+
+    # ACKNOWLEDGE, escape route, or exhausted review budget transitions case to BLOCKED_EXTERNAL
+    if req.action == schemas.DecisionAction.ACKNOWLEDGE or is_escape or budget_exhausted:
         schema_case.workflow_status = schemas.WorkflowStatus.BLOCKED_EXTERNAL
         schema_case.follow_up = schemas.FollowUp.AWAIT_EXTERNAL
+        summary_msg = "Acknowledgment applied, workflow blocked external"
+        if is_escape:
+            summary_msg = "Review escape selected, workflow blocked external"
+        elif budget_exhausted:
+            summary_msg = f"Review budget exhausted for field {target_field}, workflow blocked external"
+
         schema_case.history.append(
             schemas.HistoryEvent(
                 event_id=f"evt_{uuid.uuid4().hex[:8]}",
@@ -435,7 +497,7 @@ def submit_decision(
                 at=now,
                 type=schemas.HistoryEventType.DECISION_APPLIED.value,
                 actor=schemas.Actor(kind="SYSTEM", id=None),
-                summary="Acknowledgment applied, workflow blocked external",
+                summary=summary_msg,
                 details=decision_details
             )
         )
@@ -454,8 +516,40 @@ def get_document_content(
     db: Session = Depends(get_db)
 ):
     caller_scope = _get_caller_scope(x_run_kind)
-    # AC-07: Public request for non-demo content returns 404
-    raise HTTPException(status_code=404, detail=schemas.ErrorCode.NOT_FOUND.value)
+    cases = crud.get_cases(db, skip=0, limit=10_000)
+    matched_doc = None
+    matched_case = None
+
+    for c in cases:
+        schema_case = crud.map_db_to_schema(c)
+        for doc in schema_case.documents:
+            if doc.document_id == document_id:
+                matched_doc = doc
+                matched_case = schema_case
+                break
+        if matched_doc:
+            break
+
+    if not matched_doc:
+        raise HTTPException(status_code=404, detail=schemas.ErrorCode.NOT_FOUND.value)
+
+    # AC-07: Public request for non-demo or non-demo-safe content returns 404
+    if matched_case.run.kind == schemas.RunKind.EVAL and caller_scope != schemas.RunKind.EVAL:
+        raise HTTPException(status_code=404, detail=schemas.ErrorCode.NOT_FOUND.value)
+    if not matched_doc.demo_safe and caller_scope == schemas.RunKind.DEMO:
+        raise HTTPException(status_code=404, detail=schemas.ErrorCode.NOT_FOUND.value)
+
+    from pathlib import Path
+    safe_filename = Path(matched_doc.filename).name
+    content_bytes = f"Document content for {matched_doc.filename} ({matched_doc.document_id})".encode("utf-8")
+
+    return Response(
+        content=content_bytes,
+        media_type=matched_doc.media_type or "application/octet-stream",
+        headers={
+            "Content-Disposition": f'inline; filename="{safe_filename}"'
+        }
+    )
 
 
 @api_router.get("/stats", response_model=schemas.Stats)
