@@ -585,5 +585,6 @@ export const gmailSyncResponseSchema = obj({
   status: z.enum(["OK", "ERROR"]),
   fetched: z.number().int().nonnegative(),
   created_cases: z.array(z.string()),
+  error: z.string().nullable().optional(),
 });
 

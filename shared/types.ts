@@ -241,5 +241,6 @@ export interface GmailSyncResponse {
   status: "OK" | "ERROR";
   fetched: number;
   created_cases: string[];
+  error?: string | null;
 }
 
