@@ -1991,6 +1991,34 @@ pre {
   color: #fff;
 }
 
+.auto-sync-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: var(--bg-subtle, #f8fafc);
+  border: 1px solid var(--border-subtle, #e2e8f0);
+  border-radius: 20px;
+  padding: 5px 12px;
+  font-size: 12px;
+  color: var(--ink, #1e293b);
+  margin-left: 4px;
+}
+
+.auto-sync-badge button {
+  background: none;
+  border: none;
+  color: var(--primary, #0284c7);
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+  padding: 0 2px;
+  margin-left: 4px;
+}
+
+.auto-sync-badge button:hover {
+  text-decoration: underline;
+}
+
 /* --- Confidence Badges --- */
 .confidence-badge {
   display: inline-flex;

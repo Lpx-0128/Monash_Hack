@@ -6,7 +6,7 @@ import {
 } from "../shared/presentation-priority";
 import { ReviewActions } from "./ReviewActions";
 import { CaseProgress } from "./CaseProgress";
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useState, useRef, type ReactNode } from "react";
 import {
   AlertCircle,
   Anchor,
@@ -1285,13 +1285,18 @@ function GmailInboxView({
   const [clearing, setClearing] = useState(false);
   const [clearNotice, setClearNotice] = useState<string | null>(null);
 
-  async function handleSync(e: React.FormEvent) {
-    e.preventDefault();
+  const AUTO_SYNC_INTERVAL = 300; // 5 minutes
+  const [autoSyncEnabled, setAutoSyncEnabled] = useState(true);
+  const [secondsRemaining, setSecondsRemaining] = useState(AUTO_SYNC_INTERVAL);
+  const runSyncRef = useRef<() => Promise<void>>(undefined);
+
+  async function triggerSync(batchLimit: number) {
+    if (syncing || clearing) return;
     setSyncing(true);
     setSyncError(null);
     setClearNotice(null);
     try {
-      const payload: GmailSyncRequest = { limit };
+      const payload: GmailSyncRequest = { limit: batchLimit };
       if (username.trim()) payload.username = username.trim();
       if (appPassword.trim()) payload.app_password = appPassword.trim();
       const res = await api.gmailSync(payload);
@@ -1301,7 +1306,33 @@ function GmailInboxView({
       setSyncError((err as Error).message);
     } finally {
       setSyncing(false);
+      setSecondsRemaining(AUTO_SYNC_INTERVAL);
     }
+  }
+
+  runSyncRef.current = () => triggerSync(10);
+
+  useEffect(() => {
+    if (!autoSyncEnabled) return;
+
+    const timer = setInterval(() => {
+      setSecondsRemaining((prev) => {
+        if (prev <= 1) {
+          if (status?.configured || (username.trim() && appPassword.trim())) {
+            runSyncRef.current?.();
+          }
+          return AUTO_SYNC_INTERVAL;
+        }
+        return prev - 1;
+      });
+    }, 1000);
+
+    return () => clearInterval(timer);
+  }, [autoSyncEnabled, status?.configured, username, appPassword]);
+
+  async function handleSync(e: React.FormEvent) {
+    e.preventDefault();
+    await triggerSync(limit);
   }
 
   async function handleClear() {
@@ -1498,6 +1529,26 @@ function GmailInboxView({
                     <Trash2 size={16} aria-hidden="true" />
                     {clearing ? "Clearing Cases..." : "Clear Synced Cases"}
                   </button>
+
+                  <div
+                    className="auto-sync-badge"
+                    title="Auto-syncs 10 unread emails every 5 minutes"
+                  >
+                    <Clock3 size={13} style={{ color: autoSyncEnabled ? "#16a34a" : "#94a3b8" }} />
+                    <span>
+                      Auto-sync:{" "}
+                      <strong style={{ fontFamily: "var(--font-mono, monospace)" }}>
+                        {Math.floor(secondsRemaining / 60)}:{(secondsRemaining % 60).toString().padStart(2, "0")}
+                      </strong>
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => setAutoSyncEnabled((p) => !p)}
+                      title={autoSyncEnabled ? "Pause automatic background sync" : "Resume automatic background sync"}
+                    >
+                      {autoSyncEnabled ? "Pause" : "Resume"}
+                    </button>
+                  </div>
                 </div>
               </form>
             </Panel>
