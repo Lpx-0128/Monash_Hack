@@ -866,6 +866,17 @@ def get_gmail_status():
     )
 
 
+@api_router.post("/cases/clear", response_model=schemas.GmailClearResponse)
+def clear_all_cases(db: Session = Depends(get_db)):
+    """Delete every case and job from the database."""
+    count = crud.clear_all_cases(db)
+    return schemas.GmailClearResponse(
+        status="OK",
+        deleted_count=count,
+        message=f"Successfully deleted all {count} case(s) from the database.",
+    )
+
+
 @api_router.post("/inbox/gmail/clear", response_model=schemas.GmailClearResponse)
 def clear_gmail_cases(db: Session = Depends(get_db)):
     """Clear all dynamically synced Gmail and mock composer cases."""

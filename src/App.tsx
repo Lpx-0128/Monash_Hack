@@ -1817,7 +1817,9 @@ function Cases({
   const [filters, setFilters] = useState<Filters>(Object.fromEntries(params));
   const [search, setSearch] = useState(""),
     [createBusy, setCreateBusy] = useState(false),
-    [createError, setCreateError] = useState<Error>();
+    [createError, setCreateError] = useState<Error>(),
+    [clearingAll, setClearingAll] = useState(false),
+    [clearAllNotice, setClearAllNotice] = useState<string | null>(null);
   const { data, error, loading } = usePoll(
     `cases:${JSON.stringify(filters)}:${refresh}`,
     (signal) => api.list(filters, signal),
@@ -1843,6 +1845,20 @@ function Cases({
       setCreateBusy(false);
     }
   }
+  async function handleClearAll() {
+    if (!window.confirm("Are you sure you want to delete ALL cases from the database? This cannot be undone.")) return;
+    setClearingAll(true);
+    setClearAllNotice(null);
+    try {
+      const res = await api.casesClear();
+      setClearAllNotice(`Cleared ${res.deleted_count} case(s).`);
+      retry();
+    } catch (e) {
+      setCreateError(e as Error);
+    } finally {
+      setClearingAll(false);
+    }
+  }
   return (
     <>
       <div className="page-heading">
@@ -1851,17 +1867,37 @@ function Cases({
           <h1>All cases</h1>
           <p>Inspect the evidence. Understand the next step.</p>
         </div>
-        {isSimulation && !hostedDeployment && (
+        <div style={{ display: "flex", gap: "10px", alignItems: "center", flexWrap: "wrap" }}>
+          {isSimulation && !hostedDeployment && (
+            <button
+              className="primary"
+              disabled={createBusy}
+              onClick={() => void create()}
+            >
+              {createBusy ? "Opening fixture…" : "Process sample email"}
+              <ArrowRight size={17} aria-hidden="true" />
+            </button>
+          )}
           <button
-            className="primary"
-            disabled={createBusy}
-            onClick={() => void create()}
+            className="button danger"
+            disabled={clearingAll || createBusy}
+            onClick={() => void handleClearAll()}
+            style={{ display: "inline-flex", alignItems: "center", gap: "8px" }}
           >
-            {createBusy ? "Opening fixture…" : "Process sample email"}
-            <ArrowRight size={17} aria-hidden="true" />
+            <Trash2 size={16} aria-hidden="true" />
+            {clearingAll ? "Clearing…" : "Clear All Cases"}
           </button>
-        )}
+        </div>
       </div>
+      {clearAllNotice && (
+        <div className="notice" style={{ marginBottom: "12px", borderColor: "#16a34a" }}>
+          <Check size={18} aria-hidden="true" style={{ color: "#16a34a" }} />
+          <div>
+            <strong style={{ color: "#16a34a" }}>Done</strong>
+            <p style={{ margin: "2px 0 0", fontSize: "12px" }}>{clearAllNotice}</p>
+          </div>
+        </div>
+      )}
       {createError && <ErrorState error={createError} retry={retry} />}
       <section className="panel filter-panel" aria-label="Case filters">
         <label className="search-label">

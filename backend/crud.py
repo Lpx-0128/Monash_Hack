@@ -563,3 +563,14 @@ def clear_inbox_cases(db: Session) -> int:
     db.commit()
     return count
 
+
+def clear_all_cases(db: Session) -> int:
+    """Delete every case and associated job from the database."""
+    all_cases = db.query(models.CaseModel).all()
+    count = len(all_cases)
+    for c in all_cases:
+        db.delete(c)
+    db.commit()
+    return count
+
+

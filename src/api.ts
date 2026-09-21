@@ -47,6 +47,7 @@ export interface CaseApi {
   gmailStatus(signal?: AbortSignal): Promise<GmailStatus>;
   gmailSync(req?: GmailSyncRequest, signal?: AbortSignal): Promise<GmailSyncResponse>;
   gmailClear(signal?: AbortSignal): Promise<GmailClearResponse>;
+  casesClear(signal?: AbortSignal): Promise<GmailClearResponse>;
   composeMockEmail(formData: FormData, signal?: AbortSignal): Promise<Case>;
 }
 export async function request<T>(
@@ -134,6 +135,11 @@ function httpApi(base: string): CaseApi {
       }),
     gmailClear: (signal) =>
       request(`${base}/inbox/gmail/clear`, gmailClearResponseSchema, {
+        method: "POST",
+        signal,
+      }),
+    casesClear: (signal) =>
+      request(`${base}/cases/clear`, gmailClearResponseSchema, {
         method: "POST",
         signal,
       }),
