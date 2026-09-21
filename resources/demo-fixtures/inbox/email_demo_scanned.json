@@ -1,0 +1,10 @@
+{
+  "email_id": "email_demo_scanned",
+  "from": "demo.sender@example.invalid",
+  "subject": "Please check SI vs draft BL - DEMO-BK-00049",
+  "body": "Dear Team,\n\nPlease compare the SI and draft BL and confirm the shipment details agree.\n\nRegards,\nDemo Desk\n",
+  "attachments": [
+    "attachments/demo_scan_SI.pdf",
+    "attachments/demo_scan_BL.pdf"
+  ]
+}

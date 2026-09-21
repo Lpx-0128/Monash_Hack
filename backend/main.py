@@ -6,8 +6,17 @@ from sqlalchemy.orm import Session
 from sqlalchemy import text
 from typing import List, Optional, Any
 from datetime import datetime, timezone
+from pathlib import Path
 import uuid
 from . import schemas, models, crud, worker
+from .intelligence import ingestion, wire
+from .intelligence.recomputation import (
+    DecisionProposal,
+    OverrideConfirmation,
+    ProposalRejected,
+    validate_human_proposal,
+)
+from .intelligence.types import SourceDataIssue
 from .database import engine, get_db, SessionLocal, init_db
 from .worker_loop import start_worker_thread, stop_worker_thread
 
@@ -161,7 +170,15 @@ def create_case(
             response.status_code = status.HTTP_200_OK
             return existing
 
-    case = crud.create_case_with_job(db, req.email_id, run_kind=run_kind)
+    try:
+        case = crud.create_case_with_job(db, req.email_id, run_kind=run_kind,
+                                         public_caller=(run_kind == schemas.RunKind.DEMO))
+    except SourceDataIssue as exc:
+        # An unregistered email id never produces a fabricated source.
+        raise HTTPException(
+            status_code=404,
+            detail={"code": schemas.ErrorCode.NOT_FOUND.value, "message": str(exc)},
+        )
     return case
 
 
@@ -175,6 +192,7 @@ def batch_create_cases(
     created_count = 0
     existing_count = 0
     case_ids = []
+    skipped: list[str] = []   # ids with no registered source
 
     for email_id in req.email_ids:
         email_id = str(email_id).strip()
@@ -189,7 +207,12 @@ def batch_create_cases(
             existing_count += 1
             case_ids.append(email_id)
         else:
-            crud.create_case_with_job(db, email_id, run_kind=run_kind)
+            try:
+                crud.create_case_with_job(db, email_id, run_kind=run_kind,
+                                          public_caller=(run_kind == schemas.RunKind.DEMO))
+            except SourceDataIssue:
+                skipped.append(email_id)
+                continue
             created_count += 1
             case_ids.append(email_id)
 
@@ -253,13 +276,26 @@ def reprocess_case(
             )
         )
 
+    # Pin the new run to the identities its inputs and configuration actually
+    # have. A placeholder here would survive into the persisted run and make the
+    # run unreproducible.
+    try:
+        fresh = crud.load_input_snapshot(schema_case.email.email_id, caller_scope)
+        input_version = fresh.input_version
+        demo_safe = (caller_scope == schemas.RunKind.DEMO and fresh.demo_safe)
+    except SourceDataIssue as exc:
+        raise HTTPException(
+            status_code=404,
+            detail={"code": schemas.ErrorCode.NOT_FOUND.value, "message": str(exc)},
+        )
+
     schema_case.run = schemas.Run(
         run_id=new_run_id,
         kind=caller_scope,
         started_at=now,
-        input_version="v1",
-        config_version="v1",
-        demo_safe=(caller_scope == schemas.RunKind.DEMO)
+        input_version=input_version,
+        config_version=crud.intelligence_config().config_identity(),
+        demo_safe=demo_safe,
     )
     schema_case.workflow_status = schemas.WorkflowStatus.PROCESSING
     schema_case.machine_assessment = None
@@ -357,6 +393,12 @@ def submit_decision(
     x_run_kind: Optional[str] = Header(None, alias="X-Run-Kind"),
     db: Session = Depends(get_db)
 ):
+    """Accept one human decision durably, then return the case in PROCESSING.
+
+    Every accepted action — including acknowledgment — returns the same durable
+    202 envelope. ``resolution`` keeps the previously applied result, or null:
+    the newly accepted decision is a pending fact, not a finished one.
+    """
     caller_scope = _get_caller_scope(x_run_kind)
     c = crud.get_case_by_review_id(db, review_id)
     if not c:
@@ -368,92 +410,83 @@ def submit_decision(
 
     if not schema_case.review or schema_case.review.review_id != review_id:
         raise HTTPException(status_code=404, detail=schemas.ErrorCode.NOT_FOUND.value)
+    if req.review_id != review_id:
+        raise HTTPException(
+            status_code=422,
+            detail={"code": schemas.ErrorCode.ACTION_NOT_ALLOWED.value,
+                    "message": "the body review_id must match the path"},
+        )
 
-    # Concurrency and stale-run checks
-    case_dict = schema_case.model_dump(mode='json', by_alias=True)
+    case_dict = schema_case.model_dump(mode="json", by_alias=True)
+    # A closed review yields REVIEW_ALREADY_CLOSED before any stale-run detail.
     if schema_case.review.status != schemas.ReviewStatus.OPEN:
         raise HTTPException(
             status_code=409,
-            detail={"code": schemas.ErrorCode.REVIEW_ALREADY_CLOSED.value, "message": "Review already closed", "current_case": case_dict}
+            detail={"code": schemas.ErrorCode.REVIEW_ALREADY_CLOSED.value,
+                    "message": "Review already closed", "current_case": case_dict},
         )
     if schema_case.run.run_id != req.run_id:
         raise HTTPException(
             status_code=409,
-            detail={"code": schemas.ErrorCode.STALE_RUN.value, "message": "Stale run ID", "current_case": case_dict}
+            detail={"code": schemas.ErrorCode.STALE_RUN.value,
+                    "message": "Stale run ID", "current_case": case_dict},
         )
 
-    # Escape routes: NONE_OF_THESE for CHOICE, or "I can't tell" for VALUE_INPUT terminate in BLOCKED_EXTERNAL (Contract §5)
-    is_escape = (
-        (req.action == schemas.DecisionAction.SELECT_OPTION and req.option_id == "NONE_OF_THESE")
-        or (req.user_message and req.user_message.strip().lower() in ("i can't tell", "i cant tell", "cannot tell"))
+    requirement = wire.requirement_from_review(schema_case.review)
+    proposal = DecisionProposal(
+        review_id=review_id,
+        run_id=req.run_id,
+        action=req.action.value,
+        actor_id=req.actor_id,
+        channel=req.channel.value,
+        field=req.field.value if req.field else None,
+        side=req.side.value if req.side else None,
+        value=req.value,
+        option_id=req.option_id,
+        user_message=req.user_message,
+        override_confirmation=(
+            OverrideConfirmation(
+                review_id=req.override_confirmation.review_id,
+                run_id=req.override_confirmation.run_id,
+                field=req.override_confirmation.field.value,
+                side=req.override_confirmation.side.value,
+                proposed_value=req.override_confirmation.proposed_value,
+                confirmed=req.override_confirmation.confirmed,
+            )
+            if req.override_confirmation else None
+        ),
     )
 
-    # Action validation (unless user is using an authorized escape route)
-    if not is_escape:
-        if req.action not in schema_case.review.allowed_actions:
-            raise HTTPException(
-                status_code=422,
-                detail=schemas.ErrorCode.ACTION_NOT_ALLOWED.value
-            )
-
-        # Specific action checks
-        if req.action == schemas.DecisionAction.SELECT_OPTION:
-            valid_options = [opt.option_id for opt in schema_case.review.options] if schema_case.review.options else []
-            if req.option_id not in valid_options:
-                raise HTTPException(
-                    status_code=422,
-                    detail=schemas.ErrorCode.OPTION_NOT_FOUND.value
-                )
-
-        if req.action == schemas.DecisionAction.PROVIDE_VALUE:
-            if req.value is None or str(req.value).strip() == "":
-                raise HTTPException(
-                    status_code=422,
-                    detail=schemas.ErrorCode.INVALID_VALUE.value
-                )
-
-    # Override confirmation validation
-    if req.override_confirmation:
-        oc = req.override_confirmation
-        if (
-            oc.review_id != review_id
-            or oc.run_id != schema_case.run.run_id
-            or (req.field and oc.field != req.field)
-            or (req.side and oc.side != req.side)
-        ):
-            raise HTTPException(
-                status_code=422,
-                detail=schemas.ErrorCode.INVALID_CONFIRMATION.value
-            )
+    context = worker._build_context(schema_case)
+    try:
+        state = _decision_state(schema_case, db)
+        decision = validate_human_proposal(proposal, requirement, state, context)
+    except ProposalRejected as exc:
+        # A rejected proposal closes nothing, enqueues nothing and consumes no
+        # accepted-decision budget. The review stays OPEN.
+        raise HTTPException(status_code=422,
+                            detail={"code": exc.code, "message": exc.message})
+    except worker.RunStateUnavailable as exc:
+        raise HTTPException(
+            status_code=409,
+            detail={"code": schemas.ErrorCode.STALE_RUN.value, "message": str(exc)},
+        )
+    except worker.RunIdentityChanged as exc:
+        # The run can no longer be reasoned about; reprocessing is the remedy.
+        raise HTTPException(
+            status_code=409,
+            detail={"code": schemas.ErrorCode.STALE_RUN.value, "message": str(exc)},
+        )
+    except SourceDataIssue as exc:
+        raise HTTPException(
+            status_code=422,
+            detail={"code": schemas.ErrorCode.INVALID_VALUE.value, "message": str(exc)},
+        )
 
     now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-
     schema_case.review.status = schemas.ReviewStatus.CLOSED
     schema_case.review.closed_at = now
     schema_case.review.close_reason = "DECISION_ACCEPTED"
-
-    # Persist resolution
-    schema_case.resolution = schemas.Resolution(
-        review_id=review_id,
-        run_id=schema_case.run.run_id,
-        action=req.action,
-        value_source=schemas.ValueSource.MANUAL_OVERRIDE if req.override_confirmation else schemas.ValueSource.DOCUMENT_CONFIRMED,
-        actor_id=req.actor_id,
-        channel=req.channel,
-        user_message=req.user_message,
-        resolved_at=now,
-        final_status=schemas.MachineStatus.OK,
-        final_defect_fields=[]
-    )
-
-    decision_details = {
-        "action": req.action.value,
-        "value": req.value,
-        "option_id": req.option_id,
-        "field": req.field.value if req.field else None,
-        "side": req.side.value if req.side else None,
-        "override_confirmation": req.override_confirmation.model_dump(mode="json") if req.override_confirmation else None
-    }
 
     schema_case.history.append(
         schemas.HistoryEvent(
@@ -462,55 +495,33 @@ def submit_decision(
             at=now,
             type=schemas.HistoryEventType.DECISION_RECEIVED.value,
             actor=schemas.Actor(kind="HUMAN", id=req.actor_id),
-            summary=f"Decision {req.action.value} received",
-            details=decision_details
+            summary=f"Decision {req.action.value} accepted",
+            details={"decision_id": decision.decision_id, "action": decision.action,
+                     "field": decision.target_field, "side": decision.target_side,
+                     "target_role": decision.target_role, "escape": decision.escape},
         )
     )
 
-    # Escape routes: NONE_OF_THESE or "I can't tell" terminate in BLOCKED_EXTERNAL (Contract §5)
-    is_escape = (
-        (req.action == schemas.DecisionAction.SELECT_OPTION and req.option_id == "NONE_OF_THESE")
-        or (req.user_message and req.user_message.strip().lower() in ("i can't tell", "i cant tell", "cannot tell"))
-    )
-
-    # Review budget check: at most 2 accepted decisions per field per run
-    target_field = req.field or (schema_case.review.field if schema_case.review else None)
-    prior_field_decisions = 0
-    if target_field:
-        for ev in schema_case.history:
-            if ev.type == schemas.HistoryEventType.DECISION_APPLIED.value and ev.run_id == schema_case.run.run_id:
-                if ev.details and ev.details.get("field") == target_field.value:
-                    prior_field_decisions += 1
-
-    budget_exhausted = (prior_field_decisions >= 2)
-
-    # ACKNOWLEDGE, escape route, or exhausted review budget transitions case to BLOCKED_EXTERNAL
-    if req.action == schemas.DecisionAction.ACKNOWLEDGE or is_escape or budget_exhausted:
-        schema_case.workflow_status = schemas.WorkflowStatus.BLOCKED_EXTERNAL
-        schema_case.follow_up = schemas.FollowUp.AWAIT_EXTERNAL
-        summary_msg = "Acknowledgment applied, workflow blocked external"
-        if is_escape:
-            summary_msg = "Review escape selected, workflow blocked external"
-        elif budget_exhausted:
-            summary_msg = f"Review budget exhausted for field {target_field}, workflow blocked external"
-
-        schema_case.history.append(
-            schemas.HistoryEvent(
-                event_id=f"evt_{uuid.uuid4().hex[:8]}",
-                run_id=schema_case.run.run_id,
-                at=now,
-                type=schemas.HistoryEventType.DECISION_APPLIED.value,
-                actor=schemas.Actor(kind="SYSTEM", id=None),
-                summary=summary_msg,
-                details=decision_details
-            )
-        )
-        return crud.update_case(db, c, schema_case)
-
-    # PROVIDE_VALUE and SELECT_OPTION enqueue APPLY_DECISION
+    # Acceptance is durable but not applied: PROCESSING, previous resolution kept.
     schema_case.workflow_status = schemas.WorkflowStatus.PROCESSING
-    crud.update_case_and_create_job(db, c, schema_case, "APPLY_DECISION")
+    schema_case.updated_at = now
+    crud.update_case_with_decision(db, c, schema_case, decision, requirement, now)
     return schema_case
+
+
+def _decision_state(schema_case: schemas.Case, db: Session):
+    """The working state a proposal is validated against.
+
+    This is the same loader the worker applies decisions through, so validation
+    and application always see one state: the run's immutable automated analysis
+    plus exactly the decisions already durably applied to it. Validating against
+    a freshly rerun analysis instead would ignore an earlier accepted document
+    choice and reject a value the chosen document genuinely supports.
+    """
+    state, _context, _snapshot, _restored, _applied = worker.load_working_state(
+        db, schema_case, schema_case.run.run_id
+    )
+    return state
 
 
 @api_router.get("/documents/{document_id}/content")
@@ -519,17 +530,21 @@ def get_document_content(
     x_run_kind: Optional[str] = Header(None, alias="X-Run-Kind"),
     db: Session = Depends(get_db)
 ):
+    """Stream the exact registered bytes for an authorized document.
+
+    Placeholder content is never synthesized and the document is never resolved
+    by filename: the identity must belong to a case in the caller's scope, and
+    the bytes must still hash to what the run ingested.
+    """
     caller_scope = _get_caller_scope(x_run_kind)
-    cases = crud.get_cases(db, skip=0, limit=10_000)
+
     matched_doc = None
     matched_case = None
-
-    for c in cases:
+    for c in crud.get_cases(db, skip=0, limit=10_000):
         schema_case = crud.map_db_to_schema(c)
         for doc in schema_case.documents:
             if doc.document_id == document_id:
-                matched_doc = doc
-                matched_case = schema_case
+                matched_doc, matched_case = doc, schema_case
                 break
         if matched_doc:
             break
@@ -537,26 +552,35 @@ def get_document_content(
     if not matched_doc:
         raise HTTPException(status_code=404, detail=schemas.ErrorCode.NOT_FOUND.value)
 
-    # AC-07: Public request for non-demo or non-demo-safe content returns 404
+    # Public access needs DEMO scope *and* explicit demo-safe authorization.
     if matched_case.run.kind == schemas.RunKind.EVAL and caller_scope != schemas.RunKind.EVAL:
         raise HTTPException(status_code=404, detail=schemas.ErrorCode.NOT_FOUND.value)
     if not matched_doc.demo_safe and caller_scope == schemas.RunKind.DEMO:
         raise HTTPException(status_code=404, detail=schemas.ErrorCode.NOT_FOUND.value)
 
-    from pathlib import Path
-    safe_filename = Path(matched_doc.filename).name
-    bundle_att = Path(__file__).resolve().parent.parent / "resources" / "sdoc-hackathon-bundle" / "attachments" / safe_filename
-    if bundle_att.exists():
-        content_bytes = bundle_att.read_bytes()
-    else:
-        content_bytes = f"Document content for {matched_doc.filename} ({matched_doc.document_id})".encode("utf-8")
+    try:
+        snapshot = crud.load_input_snapshot(matched_case.email.email_id, matched_case.run.kind)
+        content_bytes = ingestion.read_source_bytes(
+            snapshot, document_id, registries=crud.intelligence_registries()
+        )
+    except SourceDataIssue as exc:
+        # Fail honestly rather than inventing bytes.
+        raise HTTPException(
+            status_code=404,
+            detail={"code": schemas.ErrorCode.NOT_FOUND.value, "message": str(exc)},
+        )
+    except OSError as exc:
+        raise HTTPException(
+            status_code=503,
+            detail={"code": schemas.ErrorCode.INTERNAL.value,
+                    "message": f"the document store is unavailable: {exc}"},
+        )
 
+    safe_filename = Path(matched_doc.filename).name
     return Response(
         content=content_bytes,
         media_type=matched_doc.media_type or "application/octet-stream",
-        headers={
-            "Content-Disposition": f'inline; filename="{safe_filename}"'
-        }
+        headers={"Content-Disposition": f'inline; filename="{safe_filename}"'},
     )
 
 

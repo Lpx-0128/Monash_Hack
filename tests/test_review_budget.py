@@ -1,78 +1,104 @@
-import pytest
-import uuid
-from backend import schemas
-from tests.test_api import poll_case
+"""Escape routes and batch ingestion, corrected against the contract.
+
+The previous version sent NONE_OF_THESE to a VALUE_INPUT review and escaped a
+PROVIDE_VALUE with free text. Both bypassed action validation, so they are
+replaced here by a real CHOICE fixture, the allowed ACKNOWLEDGE action, and
+explicit tests that the bypasses are refused.
+"""
+
+from tests.conftest import DEMO_DOCUMENT_CHOICE, DEMO_MATCH, DEMO_MISMATCH, DEMO_MISSING_WEIGHT
+from tests.helpers import create_and_wait, poll_case
 
 
-def test_escape_route_none_of_these(client):
-    email_id = f"escape_email_{uuid.uuid4().hex[:6]}"
-    client.post("/api/v1/cases", json={"email_id": email_id})
-
-    # Poll until AWAITING_HUMAN to ensure review is ready
-    case = poll_case(client, email_id, "AWAITING_HUMAN", timeout=15)
+def test_none_of_these_on_a_real_choice_review(client):
+    case = create_and_wait(client, DEMO_DOCUMENT_CHOICE, "AWAITING_HUMAN")
     review = case["review"]
-    assert review is not None
+    assert review["ui_mode"] == "CHOICE"
 
-    escape_payload = {
-        "review_id": review["review_id"],
-        "run_id": review["run_id"],
-        "channel": "DASHBOARD",
-        "actor_id": "operator_escape",
-        "action": "SELECT_OPTION",
-        "option_id": "NONE_OF_THESE"
-    }
-    r = client.post(f"/api/v1/reviews/{review['review_id']}/decision", json=escape_payload)
-    assert r.status_code == 202
-    data = r.json()
-    assert data["workflow_status"] == "BLOCKED_EXTERNAL"
-    assert data["follow_up"] == "AWAIT_EXTERNAL"
-    assert data["review"]["status"] == "CLOSED"
+    response = client.post(
+        f"/api/v1/reviews/{review['review_id']}/decision",
+        json={"review_id": review["review_id"], "run_id": review["run_id"],
+              "channel": "DASHBOARD", "actor_id": "operator_escape",
+              "action": "SELECT_OPTION", "option_id": "NONE_OF_THESE"},
+    )
+    assert response.status_code == 202
+    # Acceptance is durable; the block is recorded by the worker.
+    assert response.json()["workflow_status"] == "PROCESSING"
+
+    blocked = poll_case(client, case["case_id"], "BLOCKED_EXTERNAL")
+    assert blocked["follow_up"] == "AWAIT_EXTERNAL"
+    assert blocked["review"]["status"] == "CLOSED"
+    assert blocked["resolution"]["final_status"] == "NEEDS_REVIEW"
 
 
-def test_escape_route_user_cant_tell(client):
-    email_id = f"cant_tell_email_{uuid.uuid4().hex[:6]}"
-    client.post("/api/v1/cases", json={"email_id": email_id})
-
-    case = poll_case(client, email_id, "AWAITING_HUMAN", timeout=15)
+def test_none_of_these_is_refused_on_a_value_input_review(client):
+    """A VALUE_INPUT review has no options, so the escape option does not exist."""
+    case = create_and_wait(client, DEMO_MISSING_WEIGHT, "AWAITING_HUMAN")
     review = case["review"]
-    assert review is not None
+    assert review["ui_mode"] == "VALUE_INPUT"
 
-    cant_tell_payload = {
-        "review_id": review["review_id"],
-        "run_id": review["run_id"],
-        "channel": "TELEGRAM",
-        "actor_id": "telegram_user",
-        "action": "PROVIDE_VALUE",
-        "field": "gross_weight_kg",
-        "side": "BL",
-        "value": "123",
-        "user_message": "I can't tell"
-    }
-    r = client.post(f"/api/v1/reviews/{review['review_id']}/decision", json=cant_tell_payload)
-    assert r.status_code == 202
-    data = r.json()
-    assert data["workflow_status"] == "BLOCKED_EXTERNAL"
-    assert data["follow_up"] == "AWAIT_EXTERNAL"
+    response = client.post(
+        f"/api/v1/reviews/{review['review_id']}/decision",
+        json={"review_id": review["review_id"], "run_id": review["run_id"],
+              "channel": "DASHBOARD", "actor_id": "operator_escape",
+              "action": "SELECT_OPTION", "option_id": "NONE_OF_THESE"},
+    )
+    assert response.status_code == 422
+    assert response.json()["error"]["code"] == "ACTION_NOT_ALLOWED"
+    assert client.get(f"/api/v1/cases/{case['case_id']}").json()["review"]["status"] == "OPEN"
 
 
-def test_batch_ingestion_endpoint(client):
-    batch_payload = {
-        "email_ids": [
-            f"batch_1_{uuid.uuid4().hex[:4]}",
-            f"batch_2_{uuid.uuid4().hex[:4]}",
-            f"batch_3_{uuid.uuid4().hex[:4]}",
-        ]
-    }
-    r = client.post("/api/v1/cases/batch", json=batch_payload)
-    assert r.status_code == 202
-    data = r.json()
+def test_i_cant_tell_uses_the_allowed_acknowledge_action(client):
+    """"I can't tell" is the ACKNOWLEDGE action, not magic text in a message field."""
+    case = create_and_wait(client, DEMO_MISSING_WEIGHT, "AWAITING_HUMAN")
+    review = case["review"]
+    assert "ACKNOWLEDGE" in review["allowed_actions"]
+
+    response = client.post(
+        f"/api/v1/reviews/{review['review_id']}/decision",
+        json={"review_id": review["review_id"], "run_id": review["run_id"],
+              "channel": "TELEGRAM", "actor_id": "telegram_user",
+              "action": "ACKNOWLEDGE", "user_message": "I can't tell"},
+    )
+    assert response.status_code == 202
+    assert response.json()["workflow_status"] == "PROCESSING"
+
+    blocked = poll_case(client, case["case_id"], "BLOCKED_EXTERNAL")
+    assert blocked["follow_up"] == "AWAIT_EXTERNAL"
+    assert blocked["resolution"]["user_message"] == "I can't tell"
+
+
+def test_an_invalid_option_id_is_refused(client):
+    case = create_and_wait(client, DEMO_DOCUMENT_CHOICE, "AWAITING_HUMAN")
+    review = case["review"]
+    response = client.post(
+        f"/api/v1/reviews/{review['review_id']}/decision",
+        json={"review_id": review["review_id"], "run_id": review["run_id"],
+              "channel": "DASHBOARD", "actor_id": "op",
+              "action": "SELECT_OPTION", "option_id": "opt_not_in_this_review"},
+    )
+    assert response.status_code == 422
+    assert response.json()["error"]["code"] == "OPTION_NOT_FOUND"
+
+
+def test_batch_ingestion_accepts_registered_ids(client):
+    payload = {"email_ids": [DEMO_MATCH, DEMO_MISMATCH, DEMO_MISSING_WEIGHT]}
+    first = client.post("/api/v1/cases/batch", json=payload)
+    assert first.status_code == 202
+    data = first.json()
     assert data["total_requested"] == 3
     assert data["created"] == 3
     assert len(data["case_ids"]) == 3
 
-    # Sending again: existing count increases
-    r2 = client.post("/api/v1/cases/batch", json=batch_payload)
-    assert r2.status_code == 202
-    data2 = r2.json()
-    assert data2["existing"] == 3
-    assert data2["created"] == 0
+    second = client.post("/api/v1/cases/batch", json=payload)
+    assert second.json()["existing"] == 3
+    assert second.json()["created"] == 0
+
+
+def test_batch_ingestion_skips_unregistered_ids(client):
+    response = client.post("/api/v1/cases/batch",
+                           json={"email_ids": [DEMO_MATCH, "email_not_registered"]})
+    assert response.status_code == 202
+    data = response.json()
+    assert data["created"] == 1
+    assert "email_not_registered" not in data["case_ids"]

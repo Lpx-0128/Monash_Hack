@@ -1,0 +1,14 @@
+SHIPPING INSTRUCTION
+========================================
+Shipper: NORTHWIND PAPER EXPORTS PTE LTD
+  12 KEPPEL ROAD, #08-02; SINGAPORE 089057
+Consignee: MERIDIAN TRADING GMBH
+  HAFENSTRASSE 44; 20457 HAMBURG, GERMANY
+Notify Party: SAME AS CONSIGNEE
+Port of Loading (POL): SINGAPORE (SGSIN)
+Port of Discharge (POD): HAMBURG, GERMANY (DEHAM)
+Total Containers: 4 x 40'HC
+Gross Weight (KG): 18500 KG
+Vessel: CORAL STAR V.118E
+Booking Ref: DEMO-BK-00041
+Freight: PREPAID

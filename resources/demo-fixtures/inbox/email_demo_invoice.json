@@ -1,0 +1,7 @@
+{
+  "email_id": "email_demo_invoice",
+  "from": "demo.sender@example.invalid",
+  "subject": "Invoice query DEMO-INV-5501",
+  "body": "Dear Team,\n\nWe have a query on the invoice amount for DEMO-INV-5501. Please send the charge breakdown before we release payment.\n\nRegards,\nDemo Desk\n",
+  "attachments": []
+}
