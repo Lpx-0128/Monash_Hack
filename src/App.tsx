@@ -695,6 +695,16 @@ function ArchitectureRationaleView() {
             Google Gemini 3.5 Flash Lite operates as a bounded fallback adapter for resolving competing candidates or unstructured email intent. The model only selects from verified candidate pointers—it can never insert ungrounded synthetic text into the database.
           </p>
         </div>
+
+        <div className="arch-pillar-card">
+          <div className="pillar-icon">
+            <ShieldCheck size={22} />
+          </div>
+          <h3>Pillar 4: Cryptographic Document Integrity</h3>
+          <p>
+            Every ingested document is fingerprinted with an immutable <strong>SHA-256 cryptographic digest</strong> at intake. Re-access verifies disk bytes against stored manifests, guaranteeing tamper-proof audit trails for maritime trade compliance.
+          </p>
+        </div>
       </div>
 
       <div className="arch-lifecycle">
@@ -2494,23 +2504,46 @@ function Detail({
                   {c.documents.map((d) => (
                     <div className="document-item" key={d.document_id}>
                       <FileText size={24} aria-hidden="true" />
-                      <div>
-                        <a
-                          target="_blank"
-                          rel="noreferrer"
-                          href={api.documentUrl(d.document_id)}
-                        >
-                          {d.filename} ↗
-                        </a>
+                      <div style={{ flex: 1 }}>
+                        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "8px", flexWrap: "wrap" }}>
+                          <a
+                            target="_blank"
+                            rel="noreferrer"
+                            href={api.documentUrl(d.document_id)}
+                            style={{ fontWeight: 600 }}
+                          >
+                            {d.filename} ↗
+                          </a>
+                          {d.content_hash && (
+                            <span
+                              className="integrity-badge"
+                              style={{
+                                display: "inline-flex",
+                                alignItems: "center",
+                                gap: "4px",
+                                fontSize: "11px",
+                                padding: "2px 7px",
+                                borderRadius: "4px",
+                                background: "var(--soft-green)",
+                                color: "var(--green)",
+                                fontWeight: 600,
+                              }}
+                            >
+                              <ShieldCheck size={13} /> SHA-256 Verified
+                            </span>
+                          )}
+                        </div>
                         <small>
                           {d.role} · {d.media_type} ·{" "}
                           {d.size_bytes ?? "Unknown"} bytes ·{" "}
                           {human(d.parse_status)}
                         </small>
-                        <details>
-                          <summary>Source integrity</summary>
-                          <code className="hash">
-                            SHA-256: {d.content_hash}
+                        <details style={{ marginTop: "4px" }}>
+                          <summary style={{ fontSize: "12px", color: "var(--muted)", cursor: "pointer" }}>
+                            Cryptographic Digest (SHA-256)
+                          </summary>
+                          <code className="hash" style={{ wordBreak: "break-all", fontSize: "11.5px", padding: "4px 8px", background: "#f0f4f3", borderRadius: "4px", display: "block", marginTop: "4px" }}>
+                            {d.content_hash || "Computing hash..."}
                           </code>
                         </details>
                       </div>

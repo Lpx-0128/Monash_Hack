@@ -89,6 +89,19 @@ def generate_case_report(c: Mapping[str, Any]) -> dict[str, Any]:
             "explanation": assessment.get("explanation") or "",
         },
         "fields": fields_report,
+        "documents": [
+            {
+                "document_id": d.get("document_id"),
+                "role": d.get("role"),
+                "filename": d.get("filename"),
+                "media_type": d.get("media_type"),
+                "size_bytes": d.get("size_bytes"),
+                "sha256_hash": d.get("content_hash"),
+                "parse_status": d.get("parse_status"),
+            }
+            for d in (c.get("documents") or [])
+            if isinstance(d, dict)
+        ],
         "review": {
             "review_id": review.get("review_id"),
             "status": review.get("status"),
@@ -143,6 +156,7 @@ def export_report_csv(cases_reports: Sequence[dict[str, Any]]) -> str:
         "Overall Confidence",
         "Follow Up Action",
         "Case Summary Explanation",
+        "Document Hashes (SHA-256)",
         "Field Name",
         "Comparison Result",
         "Field Confidence",
@@ -172,12 +186,19 @@ def export_report_csv(cases_reports: Sequence[dict[str, Any]]) -> str:
         m_expl = assessment.get("explanation", "")
         ai_calls = (rep.get("metrics") or {}).get("ai_calls", 0)
 
+        docs = rep.get("documents") or []
+        doc_hashes_str = " | ".join(
+            f"{d.get('filename')} (sha256:{d.get('sha256_hash', '')[:16]}...)"
+            for d in docs
+            if d.get("sha256_hash")
+        ) if docs else "None"
+
         fields = rep.get("fields") or []
         if not fields:
             # Row for emails without field comparisons (e.g. SPAM, GENERAL)
             writer.writerow([
                 case_id, subject, sender, category, wf_status, m_status, m_conf,
-                follow_up, m_expl, "N/A", "N/A", "100%", m_expl,
+                follow_up, m_expl, doc_hashes_str, "N/A", "N/A", "100%", m_expl,
                 "", "", "", "", "", "", "DETERMINISTIC", ai_calls
             ])
             continue
@@ -199,7 +220,7 @@ def export_report_csv(cases_reports: Sequence[dict[str, Any]]) -> str:
 
             writer.writerow([
                 case_id, subject, sender, category, wf_status, m_status, m_conf,
-                follow_up, m_expl, f_name, f_res, f_conf, f_expl,
+                follow_up, m_expl, doc_hashes_str, f_name, f_res, f_conf, f_expl,
                 si_raw, si_norm, si_quote, bl_raw, bl_norm, bl_quote,
                 resolved_by, ai_calls
             ])

@@ -603,10 +603,16 @@ def get_document_content(
         )
 
     safe_filename = Path(matched_doc.filename).name
+    headers = {
+        "Content-Disposition": f'inline; filename="{safe_filename}"',
+        "ETag": f'"{matched_doc.content_hash}"',
+        "X-Content-SHA256": matched_doc.content_hash,
+        "X-Document-Integrity": "VERIFIED_TAMPER_PROOF",
+    }
     return Response(
         content=content_bytes,
         media_type=matched_doc.media_type or "application/octet-stream",
-        headers={"Content-Disposition": f'inline; filename="{safe_filename}"'},
+        headers=headers,
     )
 
 

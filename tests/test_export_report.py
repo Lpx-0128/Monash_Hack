@@ -56,6 +56,18 @@ def test_export_report_module_single_and_bulk():
                 },
             }
         ],
+        "documents": [
+            {
+                "document_id": "doc_test_123",
+                "role": "SI",
+                "filename": "shipping_instruction.pdf",
+                "media_type": "application/pdf",
+                "size_bytes": 10240,
+                "content_hash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+                "demo_safe": True,
+                "parse_status": "OK",
+            }
+        ],
         "metrics": {"ai_calls": 0, "ai_assisted_fields": 0, "processing_ms": 120},
     }
 
@@ -64,12 +76,16 @@ def test_export_report_module_single_and_bulk():
     assert rep["machine_assessment"]["overall_confidence"] == 1.0
     assert len(rep["fields"]) == 1
     assert rep["fields"][0]["si"]["evidence_quote"] == "1x40HC"
+    assert len(rep["documents"]) == 1
+    assert rep["documents"][0]["sha256_hash"] == "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
 
     bulk = export_report.generate_bulk_report([mock_case])
     assert len(bulk) == 1
 
     csv_text = export_report.export_report_csv(bulk)
     assert "Case ID,Email Subject,Email Sender" in csv_text
+    assert "Document Hashes (SHA-256)" in csv_text
+    assert "shipping_instruction.pdf" in csv_text
     assert "email_demo_test" in csv_text
     assert "container_count" in csv_text
     assert "100%" in csv_text
@@ -77,6 +93,7 @@ def test_export_report_module_single_and_bulk():
     json_text = export_report.export_report_json(bulk)
     parsed = json.loads(json_text)
     assert parsed[0]["case_id"] == "email_demo_test"
+    assert parsed[0]["documents"][0]["filename"] == "shipping_instruction.pdf"
 
 
 from tests.conftest import DEMO_MATCH, DEMO_MISSING_WEIGHT
