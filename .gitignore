@@ -6,3 +6,41 @@ playwright-report/
 *.log
 .local/
 __pycache__/
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+dist/
+build/
+*.egg
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# SQLite databases
+*.db
+*.sqlite
+*.sqlite3
+
+# Test / scratch artefacts
+submission.json
+export_*.json
+manifest*.json
+validation_report.*
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# dotenv
+.env
+.env.*
