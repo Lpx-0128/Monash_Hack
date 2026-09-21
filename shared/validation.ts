@@ -288,7 +288,7 @@ const historyType = z.enum([
   "CASE_COMPLETED",
 ]);
 export const caseSchema: z.ZodType<Case> = obj({
-  schema_version: z.literal("2.1.2"),
+  schema_version: z.union([z.literal("2.1.1"), z.literal("2.1.2")]),
   case_id: id,
   run: obj({
     run_id: id,

@@ -211,6 +211,7 @@ export function createApp(
         final_status: z.enum(statuses).optional(),
         has_open_review: z.enum(["true", "false"]).optional(),
         run_kind: z.literal("DEMO").optional(),
+        limit: z.string().optional(),
       })
       .strict()
       .parse(req.query);

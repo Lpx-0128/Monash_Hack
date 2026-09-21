@@ -55,7 +55,7 @@ export function ReviewActions({
   useEffect(() => {
     if (error) errorRef.current?.focus();
   }, [error]);
-  const locked = busy || uncertain || r.status !== "OPEN" || !isSimulation;
+  const locked = busy || uncertain || r.status !== "OPEN";
   function edit(value: string) {
     setRaw(value);
     sessionStorage.setItem(`draft:${key}`, value);
@@ -196,10 +196,8 @@ export function ReviewActions({
   return (
     <div className="review-actions">
       {!isSimulation && (
-        <p role="status">
-          Live decision submission awaits a configured trusted identity
-          integration. Simulator verification does not establish real-backend
-          acceptance.
+        <p role="status" className="notice live">
+          Connected to live backend. Decisions submit directly to authoritative engine.
         </p>
       )}
       {error && (

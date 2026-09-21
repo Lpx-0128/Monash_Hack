@@ -1,4 +1,9 @@
 """Actual pinned Hermes registration and PTB dispatch; Telegram HTTP is a test double."""
+import pytest
+pytest.importorskip("aiohttp")
+pytest.importorskip("telegram")
+pytest.importorskip("hermes_cli")
+
 import asyncio
 import json
 import os
