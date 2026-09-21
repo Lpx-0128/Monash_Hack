@@ -1,4 +1,5 @@
 from contextlib import asynccontextmanager
+import json
 import os
 from fastapi import (
     FastAPI, Depends, HTTPException, status, Response, Request, Header, APIRouter,
@@ -780,7 +781,7 @@ async def compose_mock_email(
     # Ingest case and enqueue job
     case = crud.create_case_with_job(
         db,
-        case_id=email_id,
+        email_id=email_id,
         run_kind=run_kind,
         public_caller=(run_kind == schemas.RunKind.DEMO),
     )

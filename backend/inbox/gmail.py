@@ -283,7 +283,7 @@ class GmailConnector:
             eid = rec["email_id"]
             case = crud.create_case_with_job(
                 db,
-                case_id=eid,
+                email_id=eid,
                 run_kind=run_kind,
                 public_caller=(run_kind == schemas.RunKind.DEMO),
             )
