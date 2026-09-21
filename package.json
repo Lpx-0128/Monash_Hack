@@ -10,6 +10,8 @@
     "dev:f2": "tsx --env-file=.local/f2.env server/index.ts --dev",
     "start:f2": "tsx --env-file=.local/f2.env interaction/index.ts",
     "dev": "tsx server/index.ts --dev",
+    "dev:live": "vite --mode live",
+    "dev:vite": "vite",
     "build": "tsc --noEmit && vite build",
     "start": "tsx server/index.ts",
     "test": "tsx --test tests/*.test.ts",

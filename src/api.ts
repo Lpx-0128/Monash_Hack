@@ -117,7 +117,9 @@ function httpApi(base: string): CaseApi {
 // Both implementations cross the same HTTP + validation boundary. No fixture imports in UI.
 export const createSimulatedApi = () => httpApi("/api/v1");
 export const createLiveApi = (base = "/api/v1") => httpApi(base);
-export const isSimulation = import.meta.env.VITE_API_MODE !== "live";
+export const isSimulation =
+  import.meta.env.VITE_API_MODE !== "live" &&
+  import.meta.env.MODE !== "live";
 export let hostedDeployment = false;
 export let readOnlySample = false;
 export function setHostedContext(hosted: boolean, sample: boolean) {
