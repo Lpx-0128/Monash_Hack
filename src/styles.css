@@ -1990,3 +1990,173 @@ pre {
   background: var(--primary, #0284c7);
   color: #fff;
 }
+
+/* --- Confidence Badges --- */
+.confidence-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 8px;
+  border-radius: 12px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  margin-top: 2px;
+}
+
+.conf-high {
+  background: #e6f3ec;
+  color: #12674f;
+  border: 1px solid #b7dfca;
+}
+
+.conf-med {
+  background: #fff3da;
+  color: #855409;
+  border: 1px solid #fedf9e;
+}
+
+.conf-low {
+  background: #fcebed;
+  color: #a92e34;
+  border: 1px solid #f7c1c6;
+}
+
+/* --- Architecture Rationale Layout --- */
+.arch-container {
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+}
+
+.arch-hero {
+  background: linear-gradient(135deg, #142d37 0%, #1e4554 100%);
+  color: #ffffff;
+  padding: 28px;
+  border-radius: 12px;
+  box-shadow: 0 4px 16px rgba(20, 45, 55, 0.12);
+}
+
+.arch-hero h2 {
+  margin: 0 0 10px 0;
+  font-size: 22px;
+  color: #ffffff;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.arch-hero p {
+  margin: 0;
+  color: #b8d0d8;
+  font-size: 14.5px;
+  line-height: 1.6;
+}
+
+.arch-matrix-table {
+  width: 100%;
+  border-collapse: collapse;
+  background: var(--surface);
+  border-radius: 8px;
+  overflow: hidden;
+  border: 1px solid var(--line);
+}
+
+.arch-matrix-table th,
+.arch-matrix-table td {
+  padding: 14px 18px;
+  text-align: left;
+  border-bottom: 1px solid var(--line);
+  font-size: 14px;
+}
+
+.arch-matrix-table th {
+  background: #edf3f1;
+  color: var(--ink);
+  font-weight: 700;
+}
+
+.arch-matrix-table tr:last-child td {
+  border-bottom: none;
+}
+
+.arch-pillars-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+  gap: 18px;
+}
+
+.arch-pillar-card {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  transition: transform 0.15s ease, box-shadow 0.15s ease;
+}
+
+.arch-pillar-card:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.05);
+}
+
+.arch-pillar-card .pillar-icon {
+  width: 40px;
+  height: 40px;
+  border-radius: 8px;
+  background: var(--soft-green);
+  color: var(--green);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.arch-pillar-card h3 {
+  margin: 0;
+  font-size: 17px;
+  color: var(--ink);
+}
+
+.arch-pillar-card p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 13.5px;
+  line-height: 1.5;
+}
+
+.arch-lifecycle {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 22px;
+}
+
+.arch-lifecycle-steps {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 14px;
+  margin-top: 14px;
+}
+
+.arch-lifecycle-step {
+  padding: 14px;
+  background: #f8faf9;
+  border-radius: 8px;
+  border-left: 3px solid var(--green);
+}
+
+.arch-lifecycle-step strong {
+  display: block;
+  font-size: 13px;
+  color: var(--ink);
+  margin-bottom: 4px;
+}
+
+.arch-lifecycle-step small {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.4;
+}
+

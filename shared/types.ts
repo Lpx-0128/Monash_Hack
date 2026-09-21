@@ -70,6 +70,8 @@ export interface FieldComparison {
   result: FieldResult;
   not_comparable_cause: NotComparableCause | null;
   compared_by: ResolvedBy;
+  confidence?: number;
+  explanation?: string;
 }
 export interface MachineAssessment {
   status: MachineStatus;
@@ -77,6 +79,8 @@ export interface MachineAssessment {
   has_defect: boolean;
   defect_fields: CanonicalField[];
   assessed_at: string;
+  overall_confidence?: number;
+  explanation?: string;
 }
 export type ReviewOption =
   | { option_id: string; kind: "DOCUMENT"; label: string; document_id: string }

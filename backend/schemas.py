@@ -246,6 +246,8 @@ class FieldComparison(BaseModel):
     result: FieldResult
     not_comparable_cause: Optional[NotComparableCause] = None
     compared_by: ResolvedBy
+    confidence: Optional[float] = None
+    explanation: Optional[str] = None
 
 
 class Run(BaseModel):
@@ -339,6 +341,8 @@ class MachineAssessment(BaseModel):
     has_defect: bool
     defect_fields: List[CanonicalField] = []
     assessed_at: str
+    overall_confidence: Optional[float] = None
+    explanation: Optional[str] = None
 
 
 class Resolution(BaseModel):

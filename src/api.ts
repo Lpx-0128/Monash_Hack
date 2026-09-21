@@ -44,6 +44,8 @@ export interface CaseApi {
   reprocess(id: string): Promise<Case>;
   decide(decision: DecisionRequest): Promise<Case>;
   documentUrl(id: string): string;
+  exportReportUrl(format: "json" | "csv", onlyMismatches?: boolean): string;
+  exportCaseUrl(caseId: string, format: "json" | "csv"): string;
   gmailStatus(signal?: AbortSignal): Promise<GmailStatus>;
   gmailSync(req?: GmailSyncRequest, signal?: AbortSignal): Promise<GmailSyncResponse>;
   gmailClear(signal?: AbortSignal): Promise<GmailClearResponse>;
@@ -125,6 +127,10 @@ function httpApi(base: string): CaseApi {
         202,
       ),
     documentUrl: (id) => `${base}/documents/${encodeURIComponent(id)}/content`,
+    exportReportUrl: (format, onlyMismatches = false) =>
+      `${base}/export/report?format=${encodeURIComponent(format)}&only_mismatches=${onlyMismatches ? "true" : "false"}`,
+    exportCaseUrl: (caseId, format) =>
+      `${base}/cases/${encodeURIComponent(caseId)}/export?format=${encodeURIComponent(format)}`,
     gmailStatus: (signal) =>
       request(`${base}/inbox/gmail/status`, gmailStatusSchema, { signal }),
     gmailSync: (req = {}, signal) =>

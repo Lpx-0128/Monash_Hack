@@ -14,7 +14,7 @@ from typing import List, Optional, Any
 from datetime import datetime, timezone
 from pathlib import Path
 import uuid
-from . import schemas, models, crud, worker
+from . import schemas, models, crud, worker, export_report
 from .inbox import GmailConfig, GmailConnector
 from .inbox.gmail import _sanitize_filename
 from .intelligence import ingestion, wire
@@ -908,6 +908,76 @@ def clear_gmail_cases(db: Session = Depends(get_db)):
         deleted_count=count,
         message=f"Successfully cleared {count} synced case(s).",
     )
+
+
+@api_router.get("/export/report")
+def export_verification_report(
+    format: str = "json",
+    only_mismatches: bool = False,
+    x_run_kind: Optional[str] = Header(None, alias="X-Run-Kind"),
+    db: Session = Depends(get_db),
+):
+    """Export complete SI vs BL verification & mismatch audit report in CSV or JSON format."""
+    caller_scope = _get_caller_scope(x_run_kind)
+    all_cases = crud.get_cases(db, skip=0, limit=10_000)
+    schema_cases = [crud.map_db_to_schema(c) for c in all_cases]
+    filtered_cases = [c for c in schema_cases if c.run.kind == caller_scope]
+
+    cases_dicts = [c.model_dump(mode="json", by_alias=True) for c in filtered_cases]
+    report_data = export_report.generate_bulk_report(cases_dicts, only_mismatches=only_mismatches)
+
+    if format.lower() == "csv":
+        csv_content = export_report.export_report_csv(report_data)
+        filename = "harbor_mismatches_report.csv" if only_mismatches else "harbor_verification_report.csv"
+        return Response(
+            content=csv_content,
+            media_type="text/csv",
+            headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+        )
+    else:
+        json_content = export_report.export_report_json(report_data)
+        filename = "harbor_mismatches_report.json" if only_mismatches else "harbor_verification_report.json"
+        return Response(
+            content=json_content,
+            media_type="application/json",
+            headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+        )
+
+
+@api_router.get("/cases/{case_id}/export")
+def export_single_case_report(
+    case_id: str,
+    format: str = "json",
+    x_run_kind: Optional[str] = Header(None, alias="X-Run-Kind"),
+    db: Session = Depends(get_db),
+):
+    """Export an individual case's verification report with byte-grounded evidence."""
+    db_case = crud.get_case(db, case_id=case_id)
+    if not db_case:
+        raise HTTPException(status_code=404, detail=schemas.ErrorCode.NOT_FOUND.value)
+
+    schema_case = crud.map_db_to_schema(db_case)
+    caller_scope = _get_caller_scope(x_run_kind)
+    if schema_case.run.kind == schemas.RunKind.EVAL and caller_scope != schemas.RunKind.EVAL:
+        raise HTTPException(status_code=404, detail=schemas.ErrorCode.NOT_FOUND.value)
+
+    case_dict = schema_case.model_dump(mode="json", by_alias=True)
+    report_data = export_report.generate_case_report(case_dict)
+
+    if format.lower() == "csv":
+        csv_content = export_report.export_report_csv([report_data])
+        return Response(
+            content=csv_content,
+            media_type="text/csv",
+            headers={"Content-Disposition": f'attachment; filename="{case_id}_verification_report.csv"'},
+        )
+    else:
+        json_content = export_report.export_report_json(report_data)
+        return Response(
+            content=json_content,
+            media_type="application/json",
+            headers={"Content-Disposition": f'attachment; filename="{case_id}_verification_report.json"'},
+        )
 
 
 # Mount the versioned router

@@ -142,6 +142,8 @@ def comparison_to_wire(result: FieldComparisonResult,
         result=schemas.FieldResult(result.result),
         not_comparable_cause=cause,
         compared_by=schemas.ResolvedBy(result.compared_by),
+        confidence=getattr(result, "confidence", 1.0),
+        explanation=getattr(result, "explanation", None),
     )
 
 
@@ -178,6 +180,8 @@ def assessment_to_wire(analysis: AutomatedAnalysis, assessed_at: str
         has_defect=analysis.assessment.has_defect,
         defect_fields=[schemas.CanonicalField(f) for f in analysis.assessment.defect_fields],
         assessed_at=assessed_at,
+        overall_confidence=getattr(analysis.assessment, "overall_confidence", 1.0),
+        explanation=getattr(analysis.assessment, "explanation", None),
     )
 
 
