@@ -1,0 +1,13 @@
+services:
+  - type: web
+    name: harbor-review
+    runtime: docker
+    plan: free
+    region: singapore
+    envVars:
+      - key: RUN_KIND
+        value: DEMO
+      - key: DATABASE_URL
+        value: sqlite:////app/shipping.db
+      - key: GMAIL_ENABLED
+        value: "false"

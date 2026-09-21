@@ -868,3 +868,24 @@ def get_gmail_status():
 
 # Mount the versioned router
 app.include_router(api_router)
+
+# ---------------------------------------------------------------------------
+# Frontend SPA Static Files (Render / Production deployment)
+# ---------------------------------------------------------------------------
+dist_dir = Path(__file__).resolve().parent.parent / "dist"
+if dist_dir.exists() and (dist_dir / "index.html").exists():
+    from fastapi.staticfiles import StaticFiles
+    from fastapi.responses import FileResponse
+
+    if (dist_dir / "assets").exists():
+        app.mount("/assets", StaticFiles(directory=str(dist_dir / "assets")), name="assets")
+
+    @app.get("/{full_path:path}")
+    async def serve_spa(full_path: str):
+        if full_path.startswith("api/") or full_path.startswith("health"):
+            raise HTTPException(status_code=404, detail="Not found")
+        file_path = dist_dir / full_path
+        if file_path.is_file():
+            return FileResponse(file_path)
+        return FileResponse(dist_dir / "index.html")
+
