@@ -38,5 +38,11 @@ Thumbs.db
 
 # dotenv - real configuration stays private; the secret-free example is tracked
 .env
+
+# Ephemeral demo inbox items created at runtime
+resources/demo-fixtures/inbox/email_custom_*
+resources/demo-fixtures/attachments/email_custom_*
+resources/demo-fixtures/inbox/email_gmail_*
+resources/demo-fixtures/attachments/email_gmail_*
 .env.*
 !.env.example
