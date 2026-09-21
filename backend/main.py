@@ -1,5 +1,9 @@
 from contextlib import asynccontextmanager
-from fastapi import FastAPI, Depends, HTTPException, status, Response, Request, Header, APIRouter
+import os
+from fastapi import (
+    FastAPI, Depends, HTTPException, status, Response, Request, Header, APIRouter,
+    Form, File, UploadFile
+)
 from fastapi.responses import JSONResponse
 from fastapi.exceptions import RequestValidationError
 from sqlalchemy.orm import Session
@@ -9,6 +13,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 import uuid
 from . import schemas, models, crud, worker
+from .inbox import GmailConfig, GmailConnector
+from .inbox.gmail import _sanitize_filename
 from .intelligence import ingestion, wire
 from .intelligence.recomputation import (
     DecisionProposal,
@@ -693,6 +699,153 @@ def get_stats(
         ai_assisted_cases=ai_assisted_cases,
         ai_calls_total=ai_calls_total,
         avg_processing_ms=avg_processing
+    )
+
+
+# ---------------------------------------------------------------------------
+# Live Inbox & Mock Email Ingestion Endpoints
+# ---------------------------------------------------------------------------
+
+@api_router.post("/inbox/compose", response_model=schemas.Case, status_code=status.HTTP_202_ACCEPTED)
+async def compose_mock_email(
+    from_address: str = Form(...),
+    subject: str = Form(...),
+    body: str = Form(...),
+    files: List[UploadFile] = File(default=[]),
+    x_run_kind: Optional[str] = Header(None, alias="X-Run-Kind"),
+    db: Session = Depends(get_db),
+):
+    """Compose a mock incoming email with arbitrary attachments for live verification."""
+    run_kind = _get_caller_scope(x_run_kind)
+
+    # Validate inputs
+    from_clean = from_address.strip()
+    subject_clean = subject.strip()
+    body_clean = body.strip()
+
+    if not from_clean:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail={"code": schemas.ErrorCode.INVALID_VALUE.value, "message": "from_address is required"},
+        )
+    if not subject_clean:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail={"code": schemas.ErrorCode.INVALID_VALUE.value, "message": "subject is required"},
+        )
+
+    # Resolve demo storage root
+    demo_env = os.environ.get("INTELLIGENCE_DEMO_SOURCE_ROOT")
+    if demo_env:
+        demo_root = Path(demo_env).resolve()
+    else:
+        repo_root = Path(__file__).resolve().parent.parent
+        demo_root = repo_root / "resources" / "demo-fixtures"
+
+    inbox_dir = demo_root / "inbox"
+    attachments_dir = demo_root / "attachments"
+    inbox_dir.mkdir(parents=True, exist_ok=True)
+    attachments_dir.mkdir(parents=True, exist_ok=True)
+
+    # Generate unique ID
+    now_dt = datetime.now(timezone.utc)
+    stamp = now_dt.strftime("%Y%m%d_%H%M%S")
+    short_uuid = uuid.uuid4().hex[:6]
+    email_id = f"email_custom_{stamp}_{short_uuid}"
+
+    saved_attachments = []
+    for idx, uploaded in enumerate(files):
+        if not uploaded.filename:
+            continue
+        content = await uploaded.read()
+        safe_name = _sanitize_filename(uploaded.filename)
+        filename_on_disk = f"{email_id}_{idx}_{safe_name}"
+        file_path = attachments_dir / filename_on_disk
+        file_path.write_bytes(content)
+        saved_attachments.append(f"attachments/{filename_on_disk}")
+
+    # Write email JSON
+    email_record = {
+        "email_id": email_id,
+        "from": from_clean,
+        "subject": subject_clean,
+        "body": body_clean,
+        "received_at": now_dt.strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "attachments": saved_attachments,
+    }
+
+    json_path = inbox_dir / f"{email_id}.json"
+    json_path.write_text(json.dumps(email_record, indent=2, ensure_ascii=False), encoding="utf-8")
+
+    # Ingest case and enqueue job
+    case = crud.create_case_with_job(
+        db,
+        case_id=email_id,
+        run_kind=run_kind,
+        public_caller=(run_kind == schemas.RunKind.DEMO),
+    )
+    return case
+
+
+@api_router.post("/inbox/gmail/sync", response_model=schemas.GmailSyncResponse)
+def sync_gmail_inbox(
+    req: schemas.GmailSyncRequest = None,
+    x_run_kind: Optional[str] = Header(None, alias="X-Run-Kind"),
+    db: Session = Depends(get_db),
+):
+    """Trigger an on-demand sync from Gmail over IMAP SSL."""
+    run_kind = _get_caller_scope(x_run_kind)
+    req = req or schemas.GmailSyncRequest()
+
+    config = GmailConfig.from_env()
+    if req.username and req.app_password:
+        config = GmailConfig(
+            username=req.username,
+            app_password=req.app_password,
+            imap_server=config.imap_server,
+            imap_port=config.imap_port,
+            folder=config.folder,
+            mark_as_read=config.mark_as_read,
+        )
+
+    if not config.is_configured:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={
+                "code": schemas.ErrorCode.INVALID_VALUE.value,
+                "message": "Gmail credentials not configured. Provide username and app_password in request or environment variables.",
+            },
+        )
+
+    connector = GmailConnector(config=config)
+    try:
+        result = connector.sync(db, limit=req.limit, run_kind=run_kind)
+        return schemas.GmailSyncResponse(
+            status="OK",
+            fetched=result["fetched"],
+            created_cases=result["created_cases"],
+        )
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail={
+                "code": schemas.ErrorCode.INTERNAL.value,
+                "message": f"Gmail IMAP synchronization failed: {exc}",
+            },
+        )
+
+
+@api_router.get("/inbox/gmail/status", response_model=schemas.GmailStatusResponse)
+def get_gmail_status():
+    """Check Gmail IMAP connectivity and count unread messages."""
+    connector = GmailConnector()
+    res = connector.test_connection()
+    return schemas.GmailStatusResponse(
+        configured=res.get("configured", False),
+        connected=res.get("connected", False),
+        folder=res.get("folder"),
+        unseen_count=res.get("unseen_count"),
+        error=res.get("error"),
     )
 
 
