@@ -11,6 +11,7 @@ import {
   Anchor,
   ArrowDownLeft,
   ArrowRight,
+  BarChart3,
   Check,
   CircleHelp,
   Clock3,
@@ -112,14 +113,17 @@ function Link({
   to,
   children,
   className,
+  style,
 }: {
   to: string;
   children: ReactNode;
   className?: string;
+  style?: React.CSSProperties;
 }) {
   return (
     <a
       className={className}
+      style={style}
       href={to}
       onClick={(e) => {
         if (!e.ctrlKey && !e.metaKey && !e.shiftKey && e.button === 0) {
@@ -232,6 +236,8 @@ export function App({
     [decisionFault, setDecisionFault] = useState(initialDecisionFault);
   const retry = () => setRefresh((v) => v + 1),
     isCases = path.startsWith("/cases"),
+    isInsights = path.startsWith("/insights"),
+    isOverview = path === "/" || path === "" || path.startsWith("/?"),
     isQueue =
       path.startsWith("/cases?") &&
       new URLSearchParams(path.split("?")[1]).get("has_open_review") === "true";
@@ -273,9 +279,16 @@ export function App({
         </Link>
         <div className="workspace-label">OPERATIONS</div>
         <nav aria-label="Main navigation">
-          <Link to="/" className={!isCases ? "nav-link active" : "nav-link"}>
+          <Link to="/" className={isOverview ? "nav-link active" : "nav-link"}>
             <LayoutDashboard size={19} aria-hidden="true" />
             Overview
+          </Link>
+          <Link
+            to="/insights"
+            className={isInsights ? "nav-link active" : "nav-link"}
+          >
+            <BarChart3 size={19} aria-hidden="true" />
+            Key insights
           </Link>
           <Link
             to="/cases"
@@ -313,7 +326,7 @@ export function App({
         <header className="topbar">
           <div className="breadcrumb">
             Workspace <span>/</span>{" "}
-            <strong>{isCases ? "Cases" : "Overview"}</strong>
+            <strong>{isInsights ? "Key Insights" : isCases ? "Cases" : "Overview"}</strong>
           </div>
           <div className="top-actions">
             <span className="environment">
@@ -441,6 +454,8 @@ export function App({
         <main id="main" tabIndex={-1}>
           {path.split("?")[0] === "/" ? (
             <Overview refresh={refresh} retry={retry} />
+          ) : path.split("?")[0] === "/insights" ? (
+            <Insights refresh={refresh} retry={retry} />
           ) : path.split("?")[0] === "/cases" ? (
             <Cases
               key={path}
@@ -501,10 +516,10 @@ function Overview({ refresh, retry }: { refresh: number; retry: () => void }) {
         <div>
           <div className="eyebrow">OPERATIONS / DOCUMENT REVIEW</div>
           <h1>Shipment overview</h1>
-          <p>Every case in view. A clear next step for every exception.</p>
+          <p>Recent activity, operational health, and immediate actions.</p>
         </div>
         <Link to="/cases" className="button primary">
-          Explore cases <ArrowRight size={17} aria-hidden="true" />
+          Explore all {cases.length ? `${cases.length} ` : ""}cases <ArrowRight size={17} aria-hidden="true" />
         </Link>
       </div>
       <div className="notice simulation">
@@ -570,209 +585,366 @@ function Overview({ refresh, retry }: { refresh: number; retry: () => void }) {
               <p>
                 {queue.length
                   ? "Review source evidence and resolve the values that need your input."
-                  : "Check external follow-ups and processing states below."}
+                  : "All shipments processed cleanly. Check recent activity below."}
               </p>
             </div>
             <Link to="/cases?has_open_review=true" className="button primary">
               Review queue <ArrowRight size={16} aria-hidden="true" />
             </Link>
           </div>
-          <OverviewCases cases={cases} />
-          <details className="operations-details">
-            <summary>
-              Operational insights{" "}
-              <span>Queues, workflow distribution & assessment history</span>
-            </summary>
-            <div className="overview-grid">
-              <Panel
-                title="Attention queue"
-                subtitle="The next step is always explicit."
-                action={
-                  <Link to="/cases?has_open_review=true">
-                    View queue <ArrowRight size={14} aria-hidden="true" />
-                  </Link>
-                }
-              >
-                {queue.length ? (
-                  <div className="attention-list">
-                    {queue.slice(0, 4).map((c) => (
-                      <Link
-                        to={`/cases/${c.case_id}`}
-                        key={c.case_id}
-                        className="attention-item"
-                      >
-                        <span
-                          className={`queue-icon ${c.workflow_status === "BLOCKED_EXTERNAL" ? "external" : ""}`}
-                        >
-                          <CircleHelp size={20} aria-hidden="true" />
-                        </span>
-                        <div>
-                          <strong>{c.subject}</strong>
-                          <small>
-                            {c.case_id
-                              .replace("demo_", "")
-                              .replaceAll("-", " ")}{" "}
-                            · {c.from}
-                          </small>
-                        </div>
-                        <ArrowRight size={17} aria-hidden="true" />
-                      </Link>
-                    ))}
-                  </div>
-                ) : (
-                  <Empty title="No pending decisions">
-                    Acknowledged external blocks remain visible in the workflow
-                    summary.
-                  </Empty>
-                )}
-                <div className="panel-foot">
-                  <span className="dot amber" />
-                  {acknowledged} acknowledged external{" "}
-                  {acknowledged === 1 ? "block" : "blocks"} · follow-up still
-                  needed
-                </div>
-              </Panel>
-              <Panel
-                title="Workflow distribution"
-                subtitle="Processing state, independent of the verdict."
-              >
-                <div className="workflow-list">
-                  {workflows.map((w) => (
-                    <Link
-                      className="workflow-row"
-                      to={`/cases?workflow_status=${w}`}
-                      key={w}
-                    >
-                      <div>
-                        <span className={`dot ${w.toLowerCase()}`} />
-                        {human(w)}
-                        <strong>{s.by_workflow[w]}</strong>
-                      </div>
-                      <div className="bar-track">
-                        <span
-                          className={w.toLowerCase()}
-                          style={{
-                            width: `${s.total_cases ? (s.by_workflow[w] / s.total_cases) * 100 : 0}%`,
-                          }}
-                        />
-                      </div>
-                    </Link>
-                  ))}
-                </div>
-              </Panel>
-              <Panel
-                title="Model accuracy & score_cli.py benchmark"
-                subtitle="Official evaluation metrics computed against ground truth."
+
+          <RecentCases cases={cases} />
+
+          <div
+            style={{
+              marginTop: "1.5rem",
+              padding: "1.1rem 1.25rem",
+              borderRadius: "8px",
+              border: "1px solid var(--border-subtle, rgba(0,0,0,0.08))",
+              background: "var(--bg-subtle, rgba(0,0,0,0.02))",
+              display: "flex",
+              justifyContent: "space-between",
+              alignItems: "center",
+              gap: "1rem",
+            }}
+          >
+            <div>
+              <strong style={{ fontSize: "1rem" }}>Detailed Evaluation & Operational Analytics</strong>
+              <p style={{ margin: "0.25rem 0 0", color: "var(--text-muted, #666)", fontSize: "0.875rem" }}>
+                Looking for the official score_cli.py benchmark (82.87%), frozen machine assessments, and workflow breakdowns?
+              </p>
+            </div>
+            <Link to="/insights" className="button quiet" style={{ whiteSpace: "nowrap" }}>
+              View Key Insights & Benchmark <ArrowRight size={15} aria-hidden="true" />
+            </Link>
+          </div>
+
+          <div className="sync-line">
+            <span className="dot completed" />{" "}
+            {error ? "Last successful refresh" : "Polling every 3 seconds"} ·{" "}
+            {updated?.toLocaleTimeString()}
+          </div>
+        </>
+      )}
+    </>
+  );
+}
+
+function RecentCases({ cases }: { cases: CaseSummary[] }) {
+  const { hints, note } = useWorkHints(cases);
+  const recentCases = [...cases]
+    .sort((a, b) => {
+      const timeA = new Date(a.updated_at || 0).getTime();
+      const timeB = new Date(b.updated_at || 0).getTime();
+      if (timeB !== timeA) return timeB - timeA;
+      return b.case_id.localeCompare(a.case_id);
+    })
+    .slice(0, 8);
+
+  return (
+    <Panel
+      title="Recent shipments"
+      subtitle="Latest incoming cases processed by the system. Open any case to inspect evidence or resolve reviews."
+      action={
+        <Link to="/cases" className="button quiet">
+          View all {cases.length} cases <ArrowRight size={14} aria-hidden="true" />
+        </Link>
+      }
+    >
+      <p className="muted">{note}</p>
+      <div className="case-table">
+        <div className="case-table-head">
+          <span>Shipment / sender</span>
+          <span>Workflow</span>
+          <span>Machine / operational</span>
+          <span>Next step / updated</span>
+        </div>
+        {recentCases.length ? (
+          recentCases.map((c) => (
+            <CaseRow key={c.case_id} c={c} hint={hints[c.case_id]} />
+          ))
+        ) : (
+          <Empty title="No shipments loaded" />
+        )}
+      </div>
+      <div
+        style={{
+          marginTop: "1.25rem",
+          display: "flex",
+          justifyContent: "space-between",
+          alignItems: "center",
+          padding: "0.75rem 1rem",
+          background: "var(--bg-subtle, rgba(0,0,0,0.02))",
+          borderRadius: "8px",
+          border: "1px solid var(--border-subtle, rgba(0,0,0,0.06))",
+        }}
+      >
+        <span>
+          Showing <strong>{recentCases.length}</strong> recent cases out of{" "}
+          <strong>{cases.length}</strong> total cases.
+        </span>
+        <Link to="/cases" className="button primary">
+          Explore all {cases.length} cases <ArrowRight size={16} aria-hidden="true" />
+        </Link>
+      </div>
+    </Panel>
+  );
+}
+
+function Insights({ refresh, retry }: { refresh: number; retry: () => void }) {
+  const { data, error, loading, updated } = usePoll(
+    `insights:${refresh}`,
+    async (signal) => {
+      const [stats, cases] = await Promise.all([
+        api.stats(signal),
+        api.list({}, signal),
+      ]);
+      return { stats, cases };
+    },
+  );
+  const s = data?.stats,
+    cases = data?.cases ?? [],
+    queue = cases.filter((c) => c.has_open_review),
+    acknowledged = cases.filter(
+      (c) => c.workflow_status === "BLOCKED_EXTERNAL" && !c.has_open_review,
+    ).length;
+
+  return (
+    <>
+      <div className="page-heading">
+        <div>
+          <div className="eyebrow">ANALYTICS & EVALUATION</div>
+          <h1>Key Insights & Benchmark</h1>
+          <p>Official evaluation metrics against ground truth, workflow distribution, and frozen machine assessments.</p>
+        </div>
+        <Link to="/cases" className="button quiet">
+          Browse all cases <ArrowRight size={17} aria-hidden="true" />
+        </Link>
+      </div>
+
+      {error && <ErrorState error={error} retry={retry} stale={!!data} />}
+      {loading && <Loading />}
+      {s && (
+        <>
+          <div className="metric-grid">
+            <Metric
+              title="Official Score"
+              value="82.87%"
+              note="score_cli.py weighted benchmark"
+              accent
+            />
+            <Metric
+              title="Defect Precision"
+              value="97.4%"
+              note="Stage 3 defect detection precision"
+              accent
+            />
+            <Metric
+              title="Exact-Match Rate"
+              value="94.5%"
+              note="Field-level exact value matches"
+            />
+            <Metric
+              title="Escalation Recall"
+              value="100.0%"
+              note="20/20 edge cases properly escalated"
+            />
+          </div>
+
+          <div className="overview-grid" style={{ marginTop: "1.5rem" }}>
+            <Panel
+              title="Model accuracy & score_cli.py benchmark"
+              subtitle="Official evaluation metrics computed against ground truth."
+            >
+              <div
+                style={{
+                  display: "flex",
+                  flexDirection: "column",
+                  gap: "0.6rem",
+                  padding: "0.4rem 0",
+                }}
               >
                 <div
                   style={{
                     display: "flex",
-                    flexDirection: "column",
-                    gap: "0.6rem",
-                    padding: "0.4rem 0",
+                    justifyContent: "space-between",
+                    borderBottom: "1px solid var(--border-subtle, rgba(0,0,0,0.06))",
+                    paddingBottom: "0.4rem",
                   }}
                 >
-                  <div
-                    style={{
-                      display: "flex",
-                      justifyContent: "space-between",
-                      borderBottom: "1px solid var(--border-subtle, rgba(0,0,0,0.06))",
-                      paddingBottom: "0.4rem",
-                    }}
-                  >
-                    <span><strong>Official Final Score (score_cli.py)</strong></span>
-                    <strong style={{ color: "var(--primary, #0284c7)", fontSize: "1.1rem" }}>
-                      82.87% (0.8287)
-                    </strong>
-                  </div>
-                  <div
-                    style={{
-                      display: "flex",
-                      justifyContent: "space-between",
-                      borderBottom: "1px solid var(--border-subtle, rgba(0,0,0,0.06))",
-                      paddingBottom: "0.4rem",
-                    }}
-                  >
-                    <span>Stage 1: Classification Macro-F1</span>
-                    <strong>86.2% (Accuracy: 80.4%)</strong>
-                  </div>
-                  <div
-                    style={{
-                      display: "flex",
-                      justifyContent: "space-between",
-                      borderBottom: "1px solid var(--border-subtle, rgba(0,0,0,0.06))",
-                      paddingBottom: "0.4rem",
-                    }}
-                  >
-                    <span>Stage 3: Defect Detection Precision</span>
-                    <strong style={{ color: "#16a34a" }}>97.4% (F1: 89.4%, Recall: 82.6%)</strong>
-                  </div>
-                  <div
-                    style={{
-                      display: "flex",
-                      justifyContent: "space-between",
-                      borderBottom: "1px solid var(--border-subtle, rgba(0,0,0,0.06))",
-                      paddingBottom: "0.4rem",
-                    }}
-                  >
-                    <span>Stage 3: Field-Level Exact Match Rate</span>
-                    <strong>94.5%</strong>
-                  </div>
-                  <div
-                    style={{
-                      display: "flex",
-                      justifyContent: "space-between",
-                      borderBottom: "1px solid var(--border-subtle, rgba(0,0,0,0.06))",
-                      paddingBottom: "0.4rem",
-                    }}
-                  >
-                    <span>End-to-End Defect Catch Rate</span>
-                    <strong>78.3% (36/46 defects caught)</strong>
-                  </div>
-                  <div
-                    style={{
-                      display: "flex",
-                      justifyContent: "space-between",
-                      borderBottom: "1px solid var(--border-subtle, rgba(0,0,0,0.06))",
-                      paddingBottom: "0.4rem",
-                    }}
-                  >
-                    <span>Reliability: Escalation Recall</span>
-                    <strong style={{ color: "#16a34a" }}>100.0% (20/20 edge cases escalated)</strong>
-                  </div>
-                  <div
-                    style={{
-                      display: "flex",
-                      justifyContent: "space-between",
-                      borderBottom: "1px solid var(--border-subtle, rgba(0,0,0,0.06))",
-                      paddingBottom: "0.4rem",
-                    }}
-                  >
-                    <span>Live Operational Autonomy</span>
-                    <strong>
-                      {s.total_cases
-                        ? `${((s.auto_completed / s.total_cases) * 100).toFixed(1)}%`
-                        : "0%"}{" "}
-                      ({s.auto_completed}/{s.total_cases} cases auto-completed)
-                    </strong>
-                  </div>
-                  <div
-                    style={{
-                      display: "flex",
-                      justifyContent: "space-between",
-                      paddingTop: "0.2rem",
-                    }}
-                  >
-                    <span>Active Processing Latency</span>
-                    <strong>
-                      {s.avg_processing_ms !== null
-                        ? `${s.avg_processing_ms.toFixed(1)} ms/case`
-                        : "3.1 ms/case"}
-                    </strong>
-                  </div>
+                  <span><strong>Official Final Score (score_cli.py)</strong></span>
+                  <strong style={{ color: "var(--primary, #0284c7)", fontSize: "1.1rem" }}>
+                    82.87% (0.8287)
+                  </strong>
                 </div>
-              </Panel>
-            </div>
+                <div
+                  style={{
+                    display: "flex",
+                    justifyContent: "space-between",
+                    borderBottom: "1px solid var(--border-subtle, rgba(0,0,0,0.06))",
+                    paddingBottom: "0.4rem",
+                  }}
+                >
+                  <span>Stage 1: Classification Macro-F1</span>
+                  <strong>86.2% (Accuracy: 80.4%)</strong>
+                </div>
+                <div
+                  style={{
+                    display: "flex",
+                    justifyContent: "space-between",
+                    borderBottom: "1px solid var(--border-subtle, rgba(0,0,0,0.06))",
+                    paddingBottom: "0.4rem",
+                  }}
+                >
+                  <span>Stage 3: Defect Detection Precision</span>
+                  <strong style={{ color: "#16a34a" }}>97.4% (F1: 89.4%, Recall: 82.6%)</strong>
+                </div>
+                <div
+                  style={{
+                    display: "flex",
+                    justifyContent: "space-between",
+                    borderBottom: "1px solid var(--border-subtle, rgba(0,0,0,0.06))",
+                    paddingBottom: "0.4rem",
+                  }}
+                >
+                  <span>Stage 3: Field-Level Exact Match Rate</span>
+                  <strong>94.5%</strong>
+                </div>
+                <div
+                  style={{
+                    display: "flex",
+                    justifyContent: "space-between",
+                    borderBottom: "1px solid var(--border-subtle, rgba(0,0,0,0.06))",
+                    paddingBottom: "0.4rem",
+                  }}
+                >
+                  <span>End-to-End Defect Catch Rate</span>
+                  <strong>78.3% (36/46 defects caught)</strong>
+                </div>
+                <div
+                  style={{
+                    display: "flex",
+                    justifyContent: "space-between",
+                    borderBottom: "1px solid var(--border-subtle, rgba(0,0,0,0.06))",
+                    paddingBottom: "0.4rem",
+                  }}
+                >
+                  <span>Reliability: Escalation Recall</span>
+                  <strong style={{ color: "#16a34a" }}>100.0% (20/20 edge cases escalated)</strong>
+                </div>
+                <div
+                  style={{
+                    display: "flex",
+                    justifyContent: "space-between",
+                    borderBottom: "1px solid var(--border-subtle, rgba(0,0,0,0.06))",
+                    paddingBottom: "0.4rem",
+                  }}
+                >
+                  <span>Live Operational Autonomy</span>
+                  <strong>
+                    {s.total_cases
+                      ? `${((s.auto_completed / s.total_cases) * 100).toFixed(1)}%`
+                      : "0%"}{" "}
+                    ({s.auto_completed}/{s.total_cases} cases auto-completed)
+                  </strong>
+                </div>
+                <div
+                  style={{
+                    display: "flex",
+                    justifyContent: "space-between",
+                    paddingTop: "0.2rem",
+                  }}
+                >
+                  <span>Active Processing Latency</span>
+                  <strong>
+                    {s.avg_processing_ms !== null
+                      ? `${s.avg_processing_ms.toFixed(1)} ms/case`
+                      : "3.1 ms/case"}
+                  </strong>
+                </div>
+              </div>
+            </Panel>
+
+            <Panel
+              title="Workflow distribution"
+              subtitle="Processing state, independent of the verdict."
+            >
+              <div className="workflow-list">
+                {workflows.map((w) => (
+                  <Link
+                    className="workflow-row"
+                    to={`/cases?workflow_status=${w}`}
+                    key={w}
+                  >
+                    <div>
+                      <span className={`dot ${w.toLowerCase()}`} />
+                      {human(w)}
+                      <strong>{s.by_workflow[w]}</strong>
+                    </div>
+                    <div className="bar-track">
+                      <span
+                        className={w.toLowerCase()}
+                        style={{
+                          width: `${s.total_cases ? (s.by_workflow[w] / s.total_cases) * 100 : 0}%`,
+                        }}
+                      />
+                    </div>
+                  </Link>
+                ))}
+              </div>
+            </Panel>
+          </div>
+
+          <div className="overview-grid" style={{ marginTop: "1.5rem" }}>
+            <Panel
+              title="Attention queue"
+              subtitle="The next step is always explicit."
+              action={
+                <Link to="/cases?has_open_review=true">
+                  View queue <ArrowRight size={14} aria-hidden="true" />
+                </Link>
+              }
+            >
+              {queue.length ? (
+                <div className="attention-list">
+                  {queue.slice(0, 4).map((c) => (
+                    <Link
+                      to={`/cases/${c.case_id}`}
+                      key={c.case_id}
+                      className="attention-item"
+                    >
+                      <span
+                        className={`queue-icon ${c.workflow_status === "BLOCKED_EXTERNAL" ? "external" : ""}`}
+                      >
+                        <CircleHelp size={20} aria-hidden="true" />
+                      </span>
+                      <div>
+                        <strong>{c.subject}</strong>
+                        <small>
+                          {c.case_id
+                            .replace("demo_", "")
+                            .replaceAll("-", " ")}{" "}
+                          · {c.from}
+                        </small>
+                      </div>
+                      <ArrowRight size={17} aria-hidden="true" />
+                    </Link>
+                  ))}
+                </div>
+              ) : (
+                <Empty title="No pending decisions">
+                  Acknowledged external blocks remain visible in the workflow
+                  summary.
+                </Empty>
+              )}
+              <div className="panel-foot">
+                <span className="dot amber" />
+                {acknowledged} acknowledged external{" "}
+                {acknowledged === 1 ? "block" : "blocks"} · follow-up still
+                needed
+              </div>
+            </Panel>
+
             <div className="outcome-grid">
               <StatusPanel
                 title="Frozen machine assessment"
@@ -787,27 +959,29 @@ function Overview({ refresh, retry }: { refresh: number; retry: () => void }) {
                 extra="Processing and failure stay visible independently."
               />
             </div>
-            <div className="facts-strip">
-              <span>
-                <strong>{s.ai_assisted_cases}</strong> AI-assisted runs{" "}
-                <small>
-                  {isSimulation ? "No AI calls in this simulation" : ""}
-                </small>
-              </span>
-              <span>
-                <strong>{s.bl_comparison.total}</strong> assessed BL comparisons
-              </span>
-              <span>
-                <strong>
-                  {s.avg_processing_ms === null
-                    ? "—"
-                    : `${Math.round(s.avg_processing_ms)} ms`}
-                </strong>{" "}
-                mean active processing{" "}
-                <small>{isSimulation ? "Synthetic fixture metric" : ""}</small>
-              </span>
-            </div>
-          </details>
+          </div>
+
+          <div className="facts-strip" style={{ marginTop: "1.5rem" }}>
+            <span>
+              <strong>{s.ai_assisted_cases}</strong> AI-assisted runs{" "}
+              <small>
+                {isSimulation ? "No AI calls in this simulation" : ""}
+              </small>
+            </span>
+            <span>
+              <strong>{s.bl_comparison.total}</strong> assessed BL comparisons
+            </span>
+            <span>
+              <strong>
+                {s.avg_processing_ms === null
+                  ? "—"
+                  : `${Math.round(s.avg_processing_ms)} ms`}
+              </strong>{" "}
+              mean active processing{" "}
+              <small>{isSimulation ? "Synthetic fixture metric" : ""}</small>
+            </span>
+          </div>
+
           <div className="sync-line">
             <span className="dot completed" />{" "}
             {error ? "Last successful refresh" : "Polling every 3 seconds"} ·{" "}

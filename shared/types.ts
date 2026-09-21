@@ -139,7 +139,7 @@ export interface RunRef {
   demo_safe: boolean;
 }
 export interface Case {
-  schema_version: "2.1.2";
+  schema_version: "2.1.1" | "2.1.2";
   case_id: string; // email_id within the authenticated EVAL or DEMO namespace
   run: RunRef;
   email: {

@@ -81,12 +81,12 @@ export async function request<T>(
 }
 function httpApi(base: string): CaseApi {
   return {
-    list: (filters = {}, signal) =>
-      request(
-        `${base}/cases?${new URLSearchParams(Object.entries(filters).filter(([, v]) => v !== ""))}`,
-        z.array(summarySchema),
-        { signal },
-      ),
+    list: (filters = {}, signal) => {
+      const q = new URLSearchParams(
+        Object.entries({ limit: "1000", ...filters }).filter(([, v]) => v !== ""),
+      );
+      return request(`${base}/cases?${q}`, z.array(summarySchema), { signal });
+    },
     detail: (id, signal) =>
       request(`${base}/cases/${encodeURIComponent(id)}`, caseSchema, {
         signal,

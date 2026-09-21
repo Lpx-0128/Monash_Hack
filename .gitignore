@@ -32,6 +32,7 @@ env/
 # Test / scratch artefacts
 .local/
 submission.json
+submission_*.json
 export_*.json
 manifest*.json
 validation_report.*

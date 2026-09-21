@@ -142,7 +142,7 @@ def list_cases(
     has_open_review: Optional[bool] = None,
     run_kind: Optional[schemas.RunKind] = None,
     skip: int = 0,
-    limit: int = 100,
+    limit: int = 1000,
     x_run_kind: Optional[str] = Header(None, alias="X-Run-Kind"),
     db: Session = Depends(get_db)
 ):
