@@ -13,8 +13,11 @@ from sqlalchemy import text
 from typing import List, Optional, Any
 from datetime import datetime, timezone
 from pathlib import Path
+import logging
 import uuid
 from . import schemas, models, crud, worker, export_report
+
+logger = logging.getLogger(__name__)
 from .inbox import GmailConfig, GmailConnector
 from .inbox.gmail import _sanitize_filename
 from .intelligence import ingestion, wire
@@ -644,7 +647,13 @@ def override_case_field(
     schema_case.workflow_status = schemas.WorkflowStatus.PROCESSING
     schema_case.updated_at = now
     crud.update_case_with_decision(db, c, schema_case, decision, requirement, now)
-    return schema_case
+    try:
+        worker.apply_decision(schema_case.case_id, None, schema_case.run.run_id)
+        db.refresh(c)
+        return crud.map_db_to_schema(c)
+    except Exception as exc:
+        logger.warning("Synchronous decision application failed, worker will retry: %s", exc)
+        return schema_case
 
 
 def _decision_state(schema_case: schemas.Case, db: Session):
