@@ -73,8 +73,10 @@ def test_a03_symlink_escape_is_refused(tmp_path):
     root.mkdir()
     outside.mkdir()
     secret = outside / "secret.txt"
-    secret.write_text("private")
-    (root / "link.txt").symlink_to(secret)
+    try:
+        (root / "link.txt").symlink_to(secret)
+    except OSError:
+        pytest.skip("Symlink creation requires elevated privileges on Windows")
 
     registry = SourceRegistry("participant", root, demo_safe=False)
     with pytest.raises(SourceDataIssue, match="escapes"):
