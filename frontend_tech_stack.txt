@@ -1,0 +1,27 @@
+================================================================================
+FRONTEND TECH STACK FOR GMAIL INBOX & MOCK EMAIL COMPOSER
+================================================================================
+
+1. Core Framework & Language
+   - React 19.1 (Functional components, Hooks: useState, useEffect, useCallback, useId)
+   - TypeScript 5.9 (Strict type safety, typed form payloads, and contract-aligned interfaces)
+
+2. Build & Development Tooling
+   - Vite 7.1 (Instant HMR, native ES modules, dynamic proxy routing to backend endpoints)
+
+3. UI Design System & Component Architecture
+   - Harbor Design System (Pure CSS modules & variables: typography, metric panels, focus states)
+   - Lucide React 0.468 (Vector iconography: Mail, Inbox, Send, Paperclip, RefreshCw, FileUp, CheckCircle, AlertTriangle)
+
+4. Form Handling & File Upload Engine
+   - Native HTML5 FormData API with Fetch API (Streaming multipart/form-data for multi-file attachments)
+   - Drag-and-Drop File Zone (HTML5 Drag & Drop Events with client-side mime validation for .pdf, .docx, .xlsx, .txt)
+
+5. State Management & Real-Time Synchronization
+   - Custom `usePoll` hook (Reactive interval polling for live Gmail IMAP status and unread email counters)
+   - React State + History API (`useRoute` / `go` navigation to transition seamlessly from compose to case detail view)
+
+6. API Contract Validation & Error Boundaries
+   - Zod 4.1 (Runtime schema validation for Gmail status and sync response payloads)
+   - Structured Error Handling (Network timeouts, IMAP credential errors, HTTP 422/502 error callouts)
+================================================================================

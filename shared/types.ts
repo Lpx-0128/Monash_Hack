@@ -223,3 +223,24 @@ export interface Stats {
   avg_processing_ms: number | null;
 }
 
+export interface GmailStatus {
+  configured: boolean;
+  connected: boolean;
+  folder: string | null;
+  unseen_count: number | null;
+  error: string | null;
+}
+
+export interface GmailSyncRequest {
+  limit?: number;
+  username?: string;
+  app_password?: string;
+}
+
+export interface GmailSyncResponse {
+  status: "OK" | "ERROR";
+  fetched: number;
+  created_cases: string[];
+  error?: string | null;
+}
+

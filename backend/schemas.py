@@ -452,3 +452,24 @@ class Stats(BaseModel):
     ai_assisted_cases: int = 0
     ai_calls_total: int = 0
     avg_processing_ms: Optional[float] = None
+
+
+class GmailSyncRequest(BaseModel):
+    username: Optional[str] = None
+    app_password: Optional[str] = None
+    limit: int = Field(default=10, ge=1, le=100)
+
+
+class GmailSyncResponse(BaseModel):
+    status: str
+    fetched: int
+    created_cases: List[str] = []
+    error: Optional[str] = None
+
+
+class GmailStatusResponse(BaseModel):
+    configured: bool
+    connected: bool
+    folder: Optional[str] = None
+    unseen_count: Optional[int] = None
+    error: Optional[str] = None

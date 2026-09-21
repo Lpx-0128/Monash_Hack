@@ -572,3 +572,19 @@ export function assertDemo(c: Case) {
   )
     throw new Error("Case is outside demo-safe scope");
 }
+
+export const gmailStatusSchema = obj({
+  configured: z.boolean(),
+  connected: z.boolean(),
+  folder: z.string().nullable(),
+  unseen_count: z.number().int().nonnegative().nullable(),
+  error: z.string().nullable(),
+});
+
+export const gmailSyncResponseSchema = obj({
+  status: z.enum(["OK", "ERROR"]),
+  fetched: z.number().int().nonnegative(),
+  created_cases: z.array(z.string()),
+  error: z.string().nullable().optional(),
+});
+

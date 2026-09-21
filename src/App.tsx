@@ -8,6 +8,7 @@ import { ReviewActions } from "./ReviewActions";
 import { CaseProgress } from "./CaseProgress";
 import { useEffect, useState, type ReactNode } from "react";
 import {
+  AlertCircle,
   Anchor,
   ArrowDownLeft,
   ArrowRight,
@@ -16,12 +17,19 @@ import {
   CircleHelp,
   Clock3,
   FileText,
+  FileUp,
+  Inbox,
   LayoutDashboard,
   ListFilter,
+  Mail,
+  Paperclip,
+  Plus,
   RefreshCw,
   RotateCcw,
+  Send,
   ShieldCheck,
   SlidersHorizontal,
+  Trash2,
   TriangleAlert,
   X,
 } from "lucide-react";
@@ -31,6 +39,9 @@ import type {
   FieldValue,
   Review,
   Stats,
+  GmailStatus,
+  GmailSyncRequest,
+  GmailSyncResponse,
 } from "../shared/types";
 import {
   categories,
@@ -237,6 +248,8 @@ export function App({
   const retry = () => setRefresh((v) => v + 1),
     isCases = path.startsWith("/cases"),
     isInsights = path.startsWith("/insights"),
+    isGmail = path.startsWith("/inbox/gmail"),
+    isCompose = path.startsWith("/inbox/compose"),
     isOverview = path === "/" || path === "" || path.startsWith("/?"),
     isQueue =
       path.startsWith("/cases?") &&
@@ -305,6 +318,23 @@ export function App({
             Review queue
           </Link>
         </nav>
+        <div className="workspace-label" style={{ marginTop: "18px" }}>INBOX CHANNELS</div>
+        <nav aria-label="Inbox channels">
+          <Link
+            to="/inbox/gmail"
+            className={isGmail ? "nav-link active" : "nav-link"}
+          >
+            <Inbox size={19} aria-hidden="true" />
+            Live Gmail
+          </Link>
+          <Link
+            to="/inbox/compose"
+            className={isCompose ? "nav-link active" : "nav-link"}
+          >
+            <FileUp size={19} aria-hidden="true" />
+            Mock Composer
+          </Link>
+        </nav>
         <div className="sidebar-bottom">
           <ShieldCheck size={22} aria-hidden="true" />
           <strong>
@@ -326,9 +356,27 @@ export function App({
         <header className="topbar">
           <div className="breadcrumb">
             Workspace <span>/</span>{" "}
-            <strong>{isInsights ? "Key Insights" : isCases ? "Cases" : "Overview"}</strong>
+            <strong>
+              {isGmail
+                ? "Live Gmail"
+                : isCompose
+                ? "Mock Composer"
+                : isInsights
+                ? "Key Insights"
+                : isCases
+                ? "Cases"
+                : "Overview"}
+            </strong>
           </div>
           <div className="top-actions">
+            <Link
+              to="/inbox/compose"
+              className="button quiet"
+              style={{ display: "inline-flex", alignItems: "center", gap: "6px" }}
+            >
+              <FileUp size={15} aria-hidden="true" />
+              Compose Mock
+            </Link>
             <span className="environment">
               <span />
               {isSimulation ? "SYNTHETIC DEMO" : "LIVE API"}
@@ -456,6 +504,10 @@ export function App({
             <Overview refresh={refresh} retry={retry} />
           ) : path.split("?")[0] === "/insights" ? (
             <Insights refresh={refresh} retry={retry} />
+          ) : path.split("?")[0] === "/inbox/gmail" ? (
+            <GmailInboxView refresh={refresh} retry={retry} />
+          ) : path.split("?")[0] === "/inbox/compose" ? (
+            <MockComposerView />
           ) : path.split("?")[0] === "/cases" ? (
             <Cases
               key={path}
@@ -992,6 +1044,516 @@ function Insights({ refresh, retry }: { refresh: number; retry: () => void }) {
     </>
   );
 }
+
+function GmailInboxView({
+  refresh,
+  retry,
+}: {
+  refresh: number;
+  retry: () => void;
+}) {
+  const { data: status, error, loading } = usePoll(
+    `gmail_status:${refresh}`,
+    (signal) => api.gmailStatus(signal),
+  );
+
+  const [limit, setLimit] = useState(10);
+  const [username, setUsername] = useState("");
+  const [appPassword, setAppPassword] = useState("");
+  const [showPassword, setShowPassword] = useState(false);
+  const [syncing, setSyncing] = useState(false);
+  const [syncResult, setSyncResult] = useState<GmailSyncResponse | null>(null);
+  const [syncError, setSyncError] = useState<string | null>(null);
+
+  async function handleSync(e: React.FormEvent) {
+    e.preventDefault();
+    setSyncing(true);
+    setSyncError(null);
+    try {
+      const payload: GmailSyncRequest = { limit };
+      if (username.trim()) payload.username = username.trim();
+      if (appPassword.trim()) payload.app_password = appPassword.trim();
+      const res = await api.gmailSync(payload);
+      setSyncResult(res);
+      retry();
+    } catch (err) {
+      setSyncError((err as Error).message);
+    } finally {
+      setSyncing(false);
+    }
+  }
+
+  return (
+    <>
+      <div className="page-heading">
+        <div>
+          <div className="eyebrow">INBOX CHANNELS / GMAIL IMAP</div>
+          <h1>Live Gmail Inbox</h1>
+          <p>
+            Connect over IMAP SSL to fetch incoming unread shipment correspondence and extract attachments automatically.
+          </p>
+        </div>
+        <Link to="/inbox/compose" className="button quiet" style={{ display: "inline-flex", alignItems: "center", gap: "6px" }}>
+          <FileUp size={16} aria-hidden="true" />
+          Mock Composer
+        </Link>
+      </div>
+
+      {error && <ErrorState error={error} retry={retry} stale={!!status} />}
+      {loading && !status && <Loading />}
+
+      {status && (
+        <>
+          <div className="gmail-status-grid">
+            <div className="status-stat-card">
+              <div className="label">Configuration</div>
+              <div className="value">
+                <span className={`dot ${status.configured ? "completed" : "blocked_external"}`} />
+                {status.configured ? "Configured" : "Unconfigured"}
+              </div>
+              <small className="muted">
+                {status.configured ? "Credentials detected from environment" : "Provide credentials below"}
+              </small>
+            </div>
+
+            <div className="status-stat-card">
+              <div className="label">Connection Status</div>
+              <div className="value">
+                <span className={`dot ${status.connected ? "completed" : "failed"}`} />
+                {status.connected ? "Connected" : "Disconnected"}
+              </div>
+              <small className="muted">
+                {status.connected ? "IMAP SSL handshake active" : status.error ?? "No active IMAP connection"}
+              </small>
+            </div>
+
+            <div className="status-stat-card">
+              <div className="label">Monitored Folder</div>
+              <div className="value">{status.folder ?? "INBOX"}</div>
+              <small className="muted">Default mail folder</small>
+            </div>
+
+            <div className="status-stat-card">
+              <div className="label">Unread Emails</div>
+              <div className="value">
+                {status.unseen_count !== null ? status.unseen_count : "—"}
+              </div>
+              <small className="muted">Pending automated ingestion</small>
+            </div>
+          </div>
+
+          <div className="overview-grid">
+            <Panel
+              title="Synchronize Live Inbox"
+              subtitle="Fetch unread emails, extract document attachments, and enqueue verification."
+            >
+              <form onSubmit={handleSync}>
+                <div className="form-group">
+                  <label htmlFor="sync-limit">Fetch limit per batch</label>
+                  <select
+                    id="sync-limit"
+                    value={limit}
+                    onChange={(e) => setLimit(Number(e.target.value))}
+                    disabled={syncing}
+                  >
+                    <option value={5}>5 unread emails</option>
+                    <option value={10}>10 unread emails</option>
+                    <option value={25}>25 unread emails</option>
+                    <option value={50}>50 unread emails</option>
+                  </select>
+                </div>
+
+                {!status.configured && (
+                  <div className="notice info" style={{ marginBottom: "16px" }}>
+                    <CircleHelp size={18} aria-hidden="true" />
+                    <div>
+                      <strong>Enter Gmail credentials</strong>
+                      <p style={{ margin: "2px 0 0", fontSize: "12px" }}>
+                        Credentials supplied here are used only for this request and are never saved to disk. Use a 16-character Google App Password.
+                      </p>
+                    </div>
+                  </div>
+                )}
+
+                <div className="form-group">
+                  <label htmlFor="gmail-user">
+                    Gmail Address {status.configured ? "(optional override)" : ""}
+                  </label>
+                  <input
+                    id="gmail-user"
+                    type="email"
+                    placeholder="logistics@gmail.com"
+                    value={username}
+                    onChange={(e) => setUsername(e.target.value)}
+                    disabled={syncing}
+                  />
+                </div>
+
+                <div className="form-group">
+                  <label htmlFor="gmail-pass">
+                    Google App Password {status.configured ? "(optional override)" : ""}
+                  </label>
+                  <div style={{ display: "flex", gap: "8px" }}>
+                    <input
+                      id="gmail-pass"
+                      type={showPassword ? "text" : "password"}
+                      placeholder="xxxx xxxx xxxx xxxx"
+                      value={appPassword}
+                      onChange={(e) => setAppPassword(e.target.value)}
+                      disabled={syncing}
+                    />
+                    <button
+                      type="button"
+                      className="quiet"
+                      style={{ whiteSpace: "nowrap" }}
+                      onClick={() => setShowPassword(!showPassword)}
+                    >
+                      {showPassword ? "Hide" : "Show"}
+                    </button>
+                  </div>
+                </div>
+
+                {syncError && (
+                  <div className="notice warning" style={{ marginBottom: "16px" }}>
+                    <TriangleAlert size={18} aria-hidden="true" />
+                    <div>
+                      <strong>Sync Failed</strong>
+                      <p style={{ margin: "2px 0 0", fontSize: "12px" }}>{syncError}</p>
+                    </div>
+                  </div>
+                )}
+
+                <button
+                  type="submit"
+                  className="button primary"
+                  disabled={syncing}
+                  style={{ display: "inline-flex", alignItems: "center", gap: "8px" }}
+                >
+                  <RefreshCw
+                    size={16}
+                    className={syncing ? "spin" : ""}
+                    aria-hidden="true"
+                  />
+                  {syncing ? "Synchronizing with Gmail..." : "Sync Unread Emails Now"}
+                </button>
+              </form>
+            </Panel>
+
+            <Panel
+              title="Sync Results & Ingested Cases"
+              subtitle="Recently fetched correspondence and case dispatch."
+            >
+              {syncResult ? (
+                <div>
+                  <div className="notice" style={{ marginBottom: "16px", borderColor: "#16a34a" }}>
+                    <Check size={18} aria-hidden="true" style={{ color: "#16a34a" }} />
+                    <div>
+                      <strong style={{ color: "#16a34a" }}>Sync Complete</strong>
+                      <p style={{ margin: "2px 0 0", fontSize: "12px" }}>
+                        Successfully fetched {syncResult.fetched} email(s). Created {syncResult.created_cases.length} case(s).
+                      </p>
+                    </div>
+                  </div>
+
+                  {syncResult.created_cases.length > 0 ? (
+                    <>
+                      <p style={{ fontWeight: 600, fontSize: "13px", marginBottom: "8px" }}>
+                        Click a case to inspect live verification:
+                      </p>
+                      <div className="sync-case-pills">
+                        {syncResult.created_cases.map((cid) => (
+                          <Link
+                            to={`/cases/${encodeURIComponent(cid)}`}
+                            key={cid}
+                            className="sync-case-pill"
+                          >
+                            {cid} &rarr;
+                          </Link>
+                        ))}
+                      </div>
+                    </>
+                  ) : (
+                    <Empty title="No new unread emails found">
+                      All incoming correspondence is up to date. Send an email to your Gmail account to test.
+                    </Empty>
+                  )}
+                </div>
+              ) : (
+                <Empty title="Awaiting sync">
+                  Trigger a sync above to pull unread emails from your Gmail inbox.
+                </Empty>
+              )}
+            </Panel>
+          </div>
+        </>
+      )}
+    </>
+  );
+}
+
+function MockComposerView() {
+  const [fromAddress, setFromAddress] = useState("shipper@oceanfreight-global.com");
+  const [subject, setSubject] = useState("Shipping documents for booking #SG-2026-9912");
+  const [body, setBody] = useState(
+    "Dear Team,\n\nPlease find attached the draft Bill of Lading and Shipping Instructions for the upcoming shipment.\n\nBest regards,\nLogistics Operations",
+  );
+  const [files, setFiles] = useState<File[]>([]);
+  const [isDragOver, setIsDragOver] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const presets = [
+    {
+      name: "Clean BL Match",
+      from: "doc-team@maersk-line.com",
+      subject: "Final B/L and SI comparison for container MSKU-781920",
+      body: "Attached are final copies of SI and Master BL for comparison. Everything should match container declaration.",
+    },
+    {
+      name: "Gross Weight Mismatch",
+      from: "operations@pacific-shipping.com",
+      subject: "Updated BL draft - container weight revision",
+      body: "Please verify the draft BL attached. Note that container gross weight may have an updated tally.",
+    },
+    {
+      name: "Missing SI Follow-up",
+      from: "forwarder@apex-freight.com",
+      subject: "Booking confirmation without draft BL",
+      body: "Please assist to send the draft BL for booking #APX-4412 for review.",
+    },
+  ];
+
+  function applyPreset(p: typeof presets[0]) {
+    setFromAddress(p.from);
+    setSubject(p.subject);
+    setBody(p.body);
+  }
+
+  function handleFileSelect(selected: FileList | null) {
+    if (!selected) return;
+    const added = Array.from(selected);
+    setFiles((prev) => [...prev, ...added]);
+  }
+
+  function removeFile(index: number) {
+    setFiles((prev) => prev.filter((_, i) => i !== index));
+  }
+
+  function formatBytes(bytes: number) {
+    if (bytes < 1024) return bytes + " B";
+    if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + " KB";
+    return (bytes / (1024 * 1024)).toFixed(1) + " MB";
+  }
+
+  async function handleDispatch(e: React.FormEvent) {
+    e.preventDefault();
+    if (!fromAddress.trim() || !subject.trim()) {
+      setError("Please provide a sender email address and subject.");
+      return;
+    }
+    setBusy(true);
+    setError(null);
+    try {
+      const formData = new FormData();
+      formData.append("from_address", fromAddress.trim());
+      formData.append("subject", subject.trim());
+      formData.append("body", body.trim());
+      for (const file of files) {
+        formData.append("files", file);
+      }
+      const createdCase = await api.composeMockEmail(formData);
+      // Automatic case redirection
+      go(`/cases/${encodeURIComponent(createdCase.case_id)}`);
+    } catch (err) {
+      setError((err as Error).message);
+      setBusy(false);
+    }
+  }
+
+  return (
+    <>
+      <div className="page-heading">
+        <div>
+          <div className="eyebrow">INBOX CHANNELS / SIMULATION & TESTING</div>
+          <h1>Mock Email & Document Composer</h1>
+          <p>
+            Compose arbitrary incoming emails with attachments to trigger real pipeline parsing, classification, and verification.
+          </p>
+        </div>
+        <Link to="/inbox/gmail" className="button quiet" style={{ display: "inline-flex", alignItems: "center", gap: "6px" }}>
+          <Inbox size={16} aria-hidden="true" />
+          Live Gmail
+        </Link>
+      </div>
+
+      <div className="preset-bar">
+        <span style={{ fontSize: "13px", fontWeight: 600, color: "var(--muted, #64748b)" }}>
+          Quick Presets:
+        </span>
+        {presets.map((p) => (
+          <button
+            type="button"
+            key={p.name}
+            className="preset-chip"
+            onClick={() => applyPreset(p)}
+          >
+            {p.name}
+          </button>
+        ))}
+      </div>
+
+      <form onSubmit={handleDispatch}>
+        <div className="composer-grid">
+          <Panel
+            title="Email Metadata & Content"
+            subtitle="Author the email envelope as received from the customer or shipping line."
+          >
+            <div className="form-group">
+              <label htmlFor="composer-from">Sender Email Address *</label>
+              <input
+                id="composer-from"
+                type="text"
+                required
+                placeholder="shipper@example.com"
+                value={fromAddress}
+                onChange={(e) => setFromAddress(e.target.value)}
+                disabled={busy}
+              />
+            </div>
+
+            <div className="form-group">
+              <label htmlFor="composer-subject">Subject Line *</label>
+              <input
+                id="composer-subject"
+                type="text"
+                required
+                placeholder="Shipping documents for booking..."
+                value={subject}
+                onChange={(e) => setSubject(e.target.value)}
+                disabled={busy}
+              />
+            </div>
+
+            <div className="form-group">
+              <label htmlFor="composer-body">Email Body Message</label>
+              <textarea
+                id="composer-body"
+                rows={6}
+                placeholder="Enter email correspondence text..."
+                value={body}
+                onChange={(e) => setBody(e.target.value)}
+                disabled={busy}
+              />
+            </div>
+          </Panel>
+
+          <Panel
+            title="Document Attachments"
+            subtitle="Upload PDFs, DOCX, XLSX, or plain text shipping documents."
+          >
+            <div
+              className={`dropzone ${isDragOver ? "dragover" : ""}`}
+              onDragOver={(e) => {
+                e.preventDefault();
+                setIsDragOver(true);
+              }}
+              onDragLeave={() => setIsDragOver(false)}
+              onDrop={(e) => {
+                e.preventDefault();
+                setIsDragOver(false);
+                handleFileSelect(e.dataTransfer.files);
+              }}
+            >
+              <input
+                type="file"
+                multiple
+                accept=".pdf,.docx,.xlsx,.txt"
+                onChange={(e) => handleFileSelect(e.target.files)}
+                disabled={busy}
+              />
+              <div className="dropzone-content">
+                <FileUp size={32} aria-hidden="true" style={{ color: "var(--primary, #0284c7)" }} />
+                <strong>Click or drag & drop files here</strong>
+                <small>Supports .pdf, .docx, .xlsx, .txt</small>
+              </div>
+            </div>
+
+            {files.length > 0 ? (
+              <div className="file-list">
+                {files.map((f, i) => (
+                  <div className="file-chip" key={i}>
+                    <div className="file-chip-info">
+                      <Paperclip size={14} aria-hidden="true" />
+                      <strong>{f.name}</strong>
+                      <small>({formatBytes(f.size)})</small>
+                    </div>
+                    <button
+                      type="button"
+                      aria-label={`Remove ${f.name}`}
+                      onClick={() => removeFile(i)}
+                      disabled={busy}
+                    >
+                      <Trash2 size={14} />
+                    </button>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <p className="muted" style={{ fontSize: "12px", marginTop: "12px" }}>
+                Tip: Attach both a Bill of Lading and a Shipping Instruction to test full Stage 3 comparison.
+              </p>
+            )}
+
+            <div style={{ marginTop: "24px" }}>
+              {error && (
+                <div className="notice warning" style={{ marginBottom: "14px" }}>
+                  <AlertCircle size={18} aria-hidden="true" />
+                  <div>
+                    <strong>Submission Error</strong>
+                    <p style={{ margin: "2px 0 0", fontSize: "12px" }}>{error}</p>
+                  </div>
+                </div>
+              )}
+
+              <button
+                type="submit"
+                className="button primary"
+                disabled={busy}
+                style={{
+                  width: "100%",
+                  display: "flex",
+                  justifyContent: "center",
+                  alignItems: "center",
+                  gap: "8px",
+                  padding: "12px",
+                }}
+              >
+                {busy ? (
+                  <>
+                    <RefreshCw size={16} className="spin" aria-hidden="true" />
+                    Ingesting & Dispatching Pipeline...
+                  </>
+                ) : (
+                  <>
+                    <Send size={16} aria-hidden="true" />
+                    Dispatch & Verify Shipment
+                  </>
+                )}
+              </button>
+              <small
+                className="muted"
+                style={{ display: "block", textAlign: "center", marginTop: "8px" }}
+              >
+                Automatically redirects to live case observation on dispatch.
+              </small>
+            </div>
+          </Panel>
+        </div>
+      </form>
+    </>
+  );
+}
+
 function useWorkHints(cases: CaseSummary[] | undefined) {
   const candidates = (cases ?? []).filter((c) => c.has_open_review);
   const result = usePoll(
