@@ -24,6 +24,7 @@ def main() -> int:
     parser.add_argument("--source", type=Path, default=REPO_ROOT / "resources" / "sdoc-hackathon-bundle")
     parser.add_argument("--limit", type=int, default=0, help="Maximum emails to ingest (0 = all)")
     parser.add_argument("--clean-tests", action="store_true", help="Remove test_email_* rows before ingesting")
+    parser.add_argument("--reprocess", action="store_true", help="Clear existing cases and reprocess from scratch")
     args = parser.parse_args()
 
     inbox_dir = args.source / "inbox"
@@ -39,7 +40,14 @@ def main() -> int:
 
     db = SessionLocal()
     try:
-        if args.clean_tests:
+        if args.reprocess:
+            print("Reprocessing requested: clearing existing cases and jobs...")
+            db.query(models.JobModel).delete()
+            db.query(models.RunSnapshotModel).delete()
+            db.query(models.CaseModel).delete()
+            db.commit()
+            crud.reset_intelligence_cache()
+        elif args.clean_tests:
             print("Cleaning up old test_email_* entries...")
             db.query(models.CaseModel).filter(models.CaseModel.case_id.like("test_email_%")).delete()
             db.query(models.JobModel).filter(models.JobModel.case_id.like("test_email_%")).delete()
