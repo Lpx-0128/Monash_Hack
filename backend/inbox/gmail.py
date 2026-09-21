@@ -12,6 +12,7 @@ import email.header
 import email.utils
 import imaplib
 import json
+import logging
 import os
 import re
 import uuid
@@ -22,6 +23,114 @@ from typing import Any, Mapping, Optional, Sequence
 from sqlalchemy.orm import Session
 
 from backend import crud, schemas
+
+logger = logging.getLogger(__name__)
+
+
+# --- Shipping & Freight Logistics Domain Relevance Rules ---
+
+_SHIPPING_KEYWORDS = re.compile(
+    r"\b(?:"
+    # B/L and Shipping Instructions
+    r"bill\s+of\s+lading|b/?l\b|shipping\s+instructions?|s/?i\b|draft\s+b/?l|final\s+b/?l"
+    r"|seaway\s+bill|air\s*waybill|awb\b|booking\s*(?:confirmation|advice|no|ref|number)"
+    # Freight, Cargo, Vessel & Voyage
+    r"|ocean\s+freight|freight|vessel|voyage|feeder|container|fcl|lcl|teu|feu"
+    r"|twenty[- ]foot|forty[- ]foot|40\s*h[cq]|20\s*gp|gross\s+weight|tare\s+weight|cbm\b|measurement"
+    # Parties & Ports
+    r"|port\s+of\s+loading|port\s+of\s+discharge|pol\b|pod\b|place\s+of\s+delivery|place\s+of\s+receipt"
+    r"|shipper|consignee|notify\s+party|consignor|carrier|forwarder|freight\s+forwarder"
+    # Documents & Customs
+    r"|packing\s+list|commercial\s+invoice|customs\s+(?:clearance|declaration|entry|manifest)"
+    r"|cargo\s+manifest|demurrage|detention|discrepanc\w+|seal\s+no|container\s+no"
+    r"|hs\s*code|commodity|shipping\s+order|mate['’]?s\s+receipt|cargo\s+release"
+    # Carriers & Shipping Lines
+    r"|maersk|msc|cma\s*cgm|cosco|hapag[- ]lloyd|ocean\s+network\s+express|\bone\s+line\b|evergreen|yang\s+ming|oocl|zim|wan\s+hai|pil|hmt"
+    r")",
+    re.IGNORECASE,
+)
+
+_ATTACHMENT_SHIPPING_HINTS = re.compile(
+    r"(?:"
+    r"\b(?:si|bl|b_l|b-l|draft|bill|lading|instruction|shipping|invoice|packing|manifest|booking|vessel|freight|cargo|container|customs)\b"
+    r"|shipping[-_ ]instruction"
+    r"|bill[-_ ]of[-_ ]lading"
+    r"|draft[-_ ]bl"
+    r")",
+    re.IGNORECASE,
+)
+
+_KNOWN_IRRELEVANT_SENDERS = re.compile(
+    r"(?:"
+    r"noreply|no-reply|notifications?@|alerts?@|newsletter@|marketing@|promotions?@"
+    r"|google\.com|apple\.com|amazon\.|netflix\.com|spotify\.com|linkedin\.com"
+    r"|facebookmail\.com|twitter\.com|x\.com|github\.com|uber\.com|paypal\.com"
+    r"|grab\.com|foodpanda|doordash|stripe\.com|slack\.com|atlassian\.com"
+    r")",
+    re.IGNORECASE,
+)
+
+_KNOWN_IRRELEVANT_SUBJECTS = re.compile(
+    r"(?:"
+    r"security\s+alert|password\s+reset|verify\s+your\s+email|verification\s+code"
+    r"|two-factor|2fa|login\s+attempt|sign-in|new\s+login"
+    r"|your\s+order\s+(?:has\s+been|is\s+confirmed|receipt)|receipt\s+for\s+your"
+    r"|subscription\s+(?:confirmed|renewed|cancelled)|statement\s+ready"
+    r"|welcome\s+to\b|friend\s+request|invitation\s+to\s+connect"
+    r"|weekly\s+digest|newsletter|daily\s+summary"
+    r")",
+    re.IGNORECASE,
+)
+
+
+def is_shipping_email_relevant(
+    from_addr: str,
+    subject: str,
+    body: str,
+    attachment_filenames: Sequence[str] = (),
+) -> tuple[bool, str]:
+    """Determine whether an incoming email is relevant to shipping / BL-SI verification."""
+    from backend.intelligence import classification
+
+    text_to_check = f"{subject}\n{body}"
+
+    # 1. Spam & Phishing filtering
+    spam_match = classification._SPAM.search(text_to_check)
+    if spam_match:
+        return False, f"Unsolicited promotional / spam content ({spam_match.group(0)})"
+
+    # 2. Automated service / system notification filtering (unless containing explicit shipping doc keywords)
+    if _KNOWN_IRRELEVANT_SENDERS.search(from_addr) or _KNOWN_IRRELEVANT_SUBJECTS.search(subject):
+        if not _SHIPPING_KEYWORDS.search(text_to_check) and not any(_ATTACHMENT_SHIPPING_HINTS.search(f) for f in attachment_filenames):
+            return False, "Automated third-party service / non-shipping notification"
+
+    # 3. Structured classification check
+    view = classification.build_view(subject=subject, body=body)
+    rule_res = classification.classify_rules(view)
+    if rule_res.category in ("BL_COMPARISON", "SI_REQUEST", "INVOICE_QUERY"):
+        return True, f"Matched shipping intent: {rule_res.category}"
+    if rule_res.category == "GENERAL":
+        return True, "Matched operational maritime / shipping traffic"
+
+    # 4. Domain keyword match in subject or body
+    ship_kw = _SHIPPING_KEYWORDS.search(text_to_check)
+    if ship_kw:
+        return True, f"Contains shipping domain keyword ({ship_kw.group(0)})"
+
+    # 5. Attachment inspection
+    for filename in attachment_filenames:
+        if _ATTACHMENT_SHIPPING_HINTS.search(filename):
+            return True, f"Contains shipping document attachment: {filename}"
+
+    # 6. Attachment with shipment context words
+    has_doc_attachments = any(
+        filename.lower().endswith((".pdf", ".docx", ".xlsx", ".txt", ".csv"))
+        for filename in attachment_filenames
+    )
+    if has_doc_attachments and re.search(r"\b(?:shipment|cargo|goods|docs|check\s+docs|attached\s+docs)\b", text_to_check, re.IGNORECASE):
+        return True, "Document attachment with shipment reference"
+
+    return False, "No shipping, freight, B/L, or SI relevance detected"
 
 
 def _decode_header_str(val: Optional[str]) -> str:
@@ -159,6 +268,7 @@ class GmailConnector:
 
         self.inbox_dir = self.demo_root / "inbox"
         self.attachments_dir = self.demo_root / "attachments"
+        self._last_skipped_count = 0
 
     def _ensure_dirs(self) -> None:
         self.inbox_dir.mkdir(parents=True, exist_ok=True)
@@ -190,12 +300,13 @@ class GmailConnector:
             return {"configured": True, "connected": False, "error": str(exc)}
 
     def fetch_unread(self, limit: int = 20) -> list[dict[str, Any]]:
-        """Fetch up to `limit` unread emails from Gmail, save to demo storage, and return metadata."""
+        """Fetch up to `limit` unread shipping-relevant emails from Gmail, save to demo storage, and return metadata."""
         if not self.config.is_configured:
             raise RuntimeError("Gmail connector is not configured with username and app password.")
 
         self._ensure_dirs()
         fetched_records: list[dict[str, Any]] = []
+        skipped_irrelevant = 0
 
         with imaplib.IMAP4_SSL(self.config.imap_server, self.config.imap_port) as mail:
             mail.login(self.config.username, self.config.app_password)
@@ -205,10 +316,11 @@ class GmailConnector:
 
             status, search_data = mail.search(None, "UNSEEN")
             if status != "OK" or not search_data or not search_data[0]:
+                self._last_skipped_count = 0
                 return []
 
             email_nums = search_data[0].split()
-            # Process up to limit
+            # Process unread emails up to limit
             to_process = email_nums[:limit]
 
             for msg_num in to_process:
@@ -239,6 +351,16 @@ class GmailConnector:
                         received_iso = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
                 body, attachments = _extract_body_and_attachments(msg)
+                att_names = [a[0] for a in attachments]
+
+                # Evaluate domain relevance: only ingest shipping/freight correspondence
+                is_relevant, reason = is_shipping_email_relevant(from_addr, subject, body, att_names)
+                if not is_relevant:
+                    logger.info("Gmail Sync: Skipping non-shipping email '%s' from '%s': %s", subject, from_addr, reason)
+                    if self.config.mark_as_read:
+                        mail.store(msg_num, "+FLAGS", "\\Seen")
+                    skipped_irrelevant += 1
+                    continue
 
                 # Generate clean unique email ID
                 stamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
@@ -273,10 +395,11 @@ class GmailConnector:
 
                 fetched_records.append(email_record)
 
+        self._last_skipped_count = skipped_irrelevant
         return fetched_records
 
     def sync(self, db: Session, limit: int = 20, *, run_kind: schemas.RunKind = schemas.RunKind.DEMO) -> dict[str, Any]:
-        """Fetch unread emails, register them in the database, and enqueue worker jobs."""
+        """Fetch unread shipping emails, register them in the database, and enqueue worker jobs."""
         records = self.fetch_unread(limit=limit)
         created_cases = []
         for rec in records:
@@ -289,8 +412,11 @@ class GmailConnector:
             )
             created_cases.append(case.case_id)
 
+        skipped = getattr(self, "_last_skipped_count", 0)
         return {
             "status": "OK",
             "fetched": len(records),
             "created_cases": created_cases,
+            "skipped_irrelevant": skipped,
         }
+

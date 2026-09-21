@@ -252,6 +252,7 @@ export interface GmailSyncResponse {
   status: "OK" | "ERROR";
   fetched: number;
   created_cases: string[];
+  skipped_irrelevant?: number;
   error?: string | null;
 }
 

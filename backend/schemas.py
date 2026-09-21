@@ -476,6 +476,7 @@ class GmailSyncResponse(BaseModel):
     status: str
     fetched: int
     created_cases: List[str] = []
+    skipped_irrelevant: Optional[int] = 0
     error: Optional[str] = None
 
 

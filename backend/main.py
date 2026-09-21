@@ -972,6 +972,7 @@ def sync_gmail_inbox(
             status="OK",
             fetched=result["fetched"],
             created_cases=result["created_cases"],
+            skipped_irrelevant=result.get("skipped_irrelevant", 0),
         )
     except Exception as exc:
         raise HTTPException(

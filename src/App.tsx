@@ -1513,7 +1513,10 @@ function GmailInboxView({
                     <div>
                       <strong style={{ color: "#16a34a" }}>Sync Complete</strong>
                       <p style={{ margin: "2px 0 0", fontSize: "12px" }}>
-                        Successfully fetched {syncResult.fetched} email(s). Created {syncResult.created_cases.length} case(s).
+                        Successfully ingested {syncResult.fetched} relevant shipment email(s). Created {syncResult.created_cases.length} case(s).
+                        {typeof syncResult.skipped_irrelevant === "number" && syncResult.skipped_irrelevant > 0
+                          ? ` (${syncResult.skipped_irrelevant} non-shipping email(s) filtered out)`
+                          : ""}
                       </p>
                     </div>
                   </div>
