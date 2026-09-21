@@ -1,0 +1,22 @@
+[Unit]
+Description=Harbor Review dashboard and mock backend
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=harbor
+Group=harbor
+WorkingDirectory=/opt/harbor-review/current
+EnvironmentFile=/etc/harbor-review.env
+ExecStart=/usr/bin/node node_modules/tsx/dist/cli.mjs server/index.ts
+Restart=on-failure
+RestartSec=5
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/harbor-review
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,42 @@
+{
+  "name": "harbor-review-f0",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev:v1": "tsx --env-file=.local/f2.env --env-file=.local/voice.env server/index.ts --dev",
+    "start:v1": "tsx --env-file=.local/f2.env --env-file=.local/voice.env interaction/index.ts",
+    "test:voice": "tsx --test tests/voice.test.ts",
+    "dev:f2": "tsx --env-file=.local/f2.env server/index.ts --dev",
+    "start:f2": "tsx --env-file=.local/f2.env interaction/index.ts",
+    "dev": "tsx server/index.ts --dev",
+    "build": "tsc --noEmit && vite build",
+    "start": "tsx server/index.ts",
+    "test": "tsx --test tests/*.test.ts",
+    "test:browser": "playwright test",
+    "check": "npm run test && npm run build"
+  },
+  "dependencies": {
+    "express": "^5.1.0",
+    "lucide-react": "^0.468.0",
+    "react": "^19.1.0",
+    "react-dom": "^19.1.0",
+    "tsx": "^4.20.0",
+    "zod": "^4.1.0"
+  },
+  "devDependencies": {
+    "@axe-core/playwright": "^4.10.0",
+    "@playwright/test": "^1.55.0",
+    "@types/express": "^5.0.0",
+    "@types/node": "^22.0.0",
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
+    "@vitejs/plugin-react": "^5.0.0",
+    "prettier": "^3.9.8",
+    "typescript": "^5.9.0",
+    "vite": "^7.1.0"
+  },
+  "engines": {
+    "node": ">=22.12.0"
+  }
+}

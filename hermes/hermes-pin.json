@@ -1,0 +1,6 @@
+{
+  "repository": "https://github.com/NousResearch/hermes-agent",
+  "commit": "44945d224c2ccd6e0a55f16223c7ab0dd39331bf",
+  "extension": "PluginContext.register_platform_handler(telegram, factory); native PTB Application handlers and bot delivery",
+  "live_verified": false
+}

@@ -1,0 +1,11 @@
+platform_toolsets:
+  telegram: []
+  cli: []
+plugins:
+  enabled: [shipping-review]
+agent:
+  max_turns: 1
+model:
+  provider: azure-foundry
+  default: harbor-interpretation
+  api_mode: chat_completions

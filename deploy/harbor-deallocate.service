@@ -1,0 +1,14 @@
+[Unit]
+Description=Deallocate the dedicated Harbor Review VM after judging
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/python3 /usr/local/lib/harbor-deallocate.py
+Restart=on-failure
+RestartSec=300
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true

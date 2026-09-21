@@ -1,0 +1,5 @@
+name: shipping-review
+version: 0.1.0
+description: Deterministic synthetic shipping reviews through the Hermes Telegram gateway
+provides_tools: []
+provides_hooks: []

@@ -1,0 +1,22 @@
+[Unit]
+Description=Harbor Review interaction service
+After=network-online.target harbor-web.service harbor-hermes.service
+Wants=network-online.target
+
+[Service]
+User=harbor
+Group=harbor
+WorkingDirectory=/opt/harbor-review/current
+EnvironmentFile=/etc/harbor-review.env
+ExecStart=/usr/bin/node node_modules/tsx/dist/cli.mjs interaction/index.ts
+Restart=on-failure
+RestartSec=5
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/harbor-review
+
+[Install]
+WantedBy=multi-user.target

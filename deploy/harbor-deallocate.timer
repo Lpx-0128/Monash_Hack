@@ -1,0 +1,11 @@
+[Unit]
+Description=Stop Harbor Review on 1 October 2026 at midnight Malaysia time
+
+[Timer]
+OnCalendar=2026-09-30 16:00:00 UTC
+Persistent=true
+AccuracySec=1s
+Unit=harbor-deallocate.service
+
+[Install]
+WantedBy=timers.target
