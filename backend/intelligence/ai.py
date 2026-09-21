@@ -307,8 +307,11 @@ class HttpModelClient:
         headers = {
             "content-type": "application/json",
             "authorization": f"Bearer {self.config.api_key}",
-            "api-key": self.config.api_key,
         }
+        # Only attach Azure-specific 'api-key' header if not using Gemini
+        if self.config.provider != "gemini":
+            headers["api-key"] = self.config.api_key
+
         params = {"api-version": self.config.api_version} if self.config.api_version else None
         try:
             with httpx.Client(timeout=self.config.timeout_seconds,
@@ -320,19 +323,53 @@ class HttpModelClient:
         except httpx.HTTPError as exc:
             raise RetryableProcessingError(f"the model provider is unreachable: {exc}") from exc
 
-        if response.status_code in (408, 429) or response.status_code >= 500:
+        if response.status_code == 429:
+            raise RetryableProcessingError("the model provider rate limit or quota was exceeded (429)")
+        if response.status_code in (408, 502, 503, 504) or response.status_code >= 500:
             raise RetryableProcessingError(
                 f"the model provider returned {response.status_code}"
+            )
+        if response.status_code in (401, 403):
+            raise PermanentProcessingError(
+                f"the model request was rejected with authentication error {response.status_code}"
             )
         if response.status_code >= 400:
             raise PermanentProcessingError(
                 f"the model request was rejected with {response.status_code}"
             )
+
         try:
             envelope = response.json()
-            content = envelope["choices"][0]["message"]["content"]
-        except (ValueError, KeyError, IndexError, TypeError) as exc:
-            raise ModelResponseInvalid(f"unexpected provider envelope: {exc}") from exc
+        except Exception as exc:
+            raise ModelResponseInvalid(f"provider response is not valid JSON: {exc}") from exc
+
+        if not isinstance(envelope, dict):
+            raise ModelResponseInvalid("provider envelope is not a JSON object")
+
+        if "error" in envelope:
+            err = envelope["error"]
+            err_msg = err.get("message", str(err)) if isinstance(err, dict) else str(err)
+            raise ModelResponseInvalid(f"provider returned an error: {err_msg}")
+
+        choices = envelope.get("choices")
+        if not choices or not isinstance(choices, list):
+            raise ModelResponseInvalid("provider envelope missing or empty choices")
+
+        first_choice = choices[0]
+        if not isinstance(first_choice, dict):
+            raise ModelResponseInvalid("provider choice is not an object")
+
+        message = first_choice.get("message")
+        if not isinstance(message, dict):
+            raise ModelResponseInvalid("provider choice missing message object")
+
+        if message.get("refusal"):
+            raise ModelResponseInvalid(f"model refused request: {message.get('refusal')}")
+
+        content = message.get("content")
+        if content is None or not isinstance(content, str) or not content.strip():
+            raise ModelResponseInvalid("provider returned empty or null content")
+
         return parse_json_response(content)
 
     def classify(self, *, subject: str, current_message: str, quoted_history: str,
