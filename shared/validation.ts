@@ -201,8 +201,8 @@ const assessment = obj({
   has_defect: z.boolean(),
   defect_fields: z.array(field),
   assessed_at: time,
-  overall_confidence: z.number().min(0).max(1).optional(),
-  explanation: z.string().optional(),
+  overall_confidence: z.number().min(0).max(1).nullable().optional(),
+  explanation: z.string().nullable().optional(),
 }).superRefine((a, c) => {
   if (
     new Set(a.defect_fields).size !== a.defect_fields.length ||
@@ -236,8 +236,8 @@ const comparison = obj({
     ])
     .nullable(),
   compared_by: actor,
-  confidence: z.number().min(0).max(1).optional(),
-  explanation: z.string().optional(),
+  confidence: z.number().min(0).max(1).nullable().optional(),
+  explanation: z.string().nullable().optional(),
 }).superRefine((f, c) => {
   const fail = (message: string) => c.addIssue({ code: "custom", message });
   if ((f.result === "NOT_COMPARABLE") !== (f.not_comparable_cause !== null))

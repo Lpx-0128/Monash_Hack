@@ -2395,7 +2395,7 @@ function Detail({
               <h2>Automated assessment</h2>
               <div style={{ display: "flex", alignItems: "center", gap: "8px", flexWrap: "wrap", marginBottom: "8px" }}>
                 <Badge value={c.machine_assessment?.status ?? null} />
-                {c.machine_assessment?.overall_confidence !== undefined && (
+                {c.machine_assessment?.overall_confidence != null && (
                   <span
                     className={`confidence-badge ${c.machine_assessment.overall_confidence >= 0.85 ? "conf-high" : c.machine_assessment.overall_confidence >= 0.7 ? "conf-med" : "conf-low"}`}
                   >
@@ -2613,7 +2613,7 @@ function ComparisonFields({ c }: { c: Case }) {
     >
       <div>
         <h3>{fieldTitles[f.field]}</h3>
-        {f.confidence !== undefined && (
+        {f.confidence != null && (
           <span
             className={`confidence-badge ${f.confidence >= 0.85 ? "conf-high" : f.confidence >= 0.7 ? "conf-med" : "conf-low"}`}
             title={`Verification Confidence: ${Math.round(f.confidence * 100)}%`}
