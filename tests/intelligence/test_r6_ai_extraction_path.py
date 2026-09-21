@@ -54,12 +54,13 @@ class ChoosingModel:
         if self.block_id is not None:
             token = f"block:{self.block_id}"
         else:
-            token = location_tokens[self.pick] if location_tokens else "block:none"
+            token = list(location_tokens)[self.pick] if location_tokens else "block:none"
+        value = location_tokens.get(token, {}).get("value", "")
         return ai_module.ExtractionProposal(
             document_id=document_id,
             candidates=(ai_module.ExtractionCandidateProposal(
-                field=self.field, raw="quoted from the document",
-                locator_token=token, source_text="", derivation="DIRECT",
+                field=self.field, raw=value,
+                locator_token=token, source_text=value, derivation="DIRECT",
             ),),
         )
 
@@ -141,7 +142,7 @@ def test_r6_a_proposal_pointing_outside_the_documents_candidates_is_discarded():
                 document_id=document_id,
                 candidates=(ai_module.ExtractionCandidateProposal(
                     field="gross_weight_kg", raw="x",
-                    locator_token=location_tokens[0], source_text="",
+                    locator_token=list(location_tokens)[0], source_text="",
                     derivation="DIRECT",
                 ),),
             )

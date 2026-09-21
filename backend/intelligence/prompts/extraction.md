@@ -1,4 +1,4 @@
-# Targeted field extraction — prompt v1
+# Targeted field extraction — prompt v2
 
 ## Instructions (authoritative)
 
@@ -10,7 +10,12 @@ Rules:
 - Only report a field that is actually present in the supplied document text.
 - `raw` must be copied exactly from the document. Do not reformat, round,
   convert units, or complete a partial value.
-- `source_text` must be an exact substring of the supplied text.
+- `location_blocks` maps each token to its source label and complete value.
+  Copy that block's complete `value` exactly into both `raw` and `source_text`.
+  Never quote another block while selecting this token.
+- Use the labels and document context to interpret alternatives. If the source
+  does not establish which competing reading applies, return the field in
+  `unresolved_fields`; do not choose merely because a reading appears first.
 - Choose `locator` from the location tokens supplied with the document. Never
   invent a page, index, coordinate or character offset.
 - `derivation` is `DIRECT` for a value read from one place, or `TOTAL` for a

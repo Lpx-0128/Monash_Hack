@@ -21,7 +21,7 @@ from .types import PermanentProcessingError
 # can change an extracted value changes: the manifest digest then changes too,
 # and a run computed under the old behaviour refuses to resume under the new one
 # rather than being silently reinterpreted.
-CODE_RELEASE = "person-a-1.2.0"
+CODE_RELEASE = "person-a-1.3.0"
 
 PARSER_VERSIONS = {
     "text": "text-1.0.0",

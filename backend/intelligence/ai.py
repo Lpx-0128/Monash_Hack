@@ -12,12 +12,14 @@ import json
 import re
 from dataclasses import dataclass, field as dc_field
 from pathlib import Path
-from typing import Optional, Protocol, Sequence
+from typing import Any, Mapping, Optional, Protocol, Sequence
 
 from .config import PROMPTS_DIR, AIConfig
 from .types import PermanentProcessingError, RetryableProcessingError
 
-VERSION = "ai-1.0.0"
+VERSION = "ai-1.1.0"
+
+LocationTokens = Sequence[str] | Mapping[str, Mapping[str, Any]]
 
 CATEGORIES = ("BL_COMPARISON", "SI_REQUEST", "INVOICE_QUERY", "GENERAL", "SPAM")
 DERIVATIONS = ("DIRECT", "TOTAL")
@@ -64,7 +66,7 @@ class ModelClient(Protocol):
         ...
 
     def extract(self, *, document_id: str, document_text: str,
-                location_tokens: Sequence[str],
+                location_tokens: LocationTokens,
                 requested_fields: Sequence[str]) -> ExtractionProposal:
         ...
 
@@ -115,7 +117,7 @@ def validate_classification(payload, *, source_text: str) -> ClassificationPropo
 
 
 def validate_extraction(payload, *, document_id: str, allowed_fields: Sequence[str],
-                        allowed_tokens: Sequence[str], source_text: str) -> ExtractionProposal:
+                        allowed_tokens: LocationTokens, source_text: str) -> ExtractionProposal:
     """Validate fields, document identity, location tokens and quote existence.
 
     Extra fields, unknown documents and invented locations are rejected outright;
@@ -149,8 +151,12 @@ def validate_extraction(payload, *, document_id: str, allowed_fields: Sequence[s
         if token not in allowed_token_set:
             raise ModelResponseInvalid(f"locator {token!r} was not offered for this document")
         quote = reference.get("source_text")
-        if not isinstance(quote, str) or quote not in source_text:
+        if not isinstance(quote, str) or not quote.strip() or quote not in source_text:
             raise ModelResponseInvalid(f"the quote for {field!r} does not occur in the document")
+        if isinstance(allowed_tokens, Mapping):
+            value = allowed_tokens[token]["value"]
+            if raw != value or quote != value:
+                raise ModelResponseInvalid(f"the raw value or quote for {field!r} disagrees with its block")
         derivation = entry.get("derivation", "DIRECT")
         if derivation not in DERIVATIONS:
             raise ModelResponseInvalid(f"derivation {derivation!r} is not supported")
@@ -256,7 +262,7 @@ class ScriptedModelClient:
         return validate_classification(payload, source_text=f"{subject}\n{current_message}\n{quoted_history}")
 
     def extract(self, *, document_id: str, document_text: str,
-                location_tokens: Sequence[str],
+                location_tokens: LocationTokens,
                 requested_fields: Sequence[str]) -> ExtractionProposal:
         self.calls.append(("extract", document_id))
         payload = self.extractions.get(document_id)
@@ -346,13 +352,14 @@ class HttpModelClient:
         )
 
     def extract(self, *, document_id: str, document_text: str,
-                location_tokens: Sequence[str],
+                location_tokens: LocationTokens,
                 requested_fields: Sequence[str]) -> ExtractionProposal:
         document_block = json.dumps(
             {
                 "document_id": document_id,
                 "requested_fields": list(requested_fields),
                 "location_tokens": list(location_tokens),
+                "location_blocks": dict(location_tokens) if isinstance(location_tokens, Mapping) else {},
                 "text": document_text[:12_000],
             },
             ensure_ascii=False, indent=2,

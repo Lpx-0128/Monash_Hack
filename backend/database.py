@@ -26,9 +26,10 @@ SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 Base = declarative_base()
 
 
-def init_db():
+def init_db(bind=None):
     from . import models
-    Base.metadata.create_all(bind=engine)
+    from .migrations import initialize_schema
+    initialize_schema(bind if bind is not None else engine, Base.metadata)
 
 
 def get_db():

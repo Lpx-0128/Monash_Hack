@@ -1,5 +1,9 @@
 # Person A — integration handoff for B and C
 
+Latest update: [D1/D2 fixes and upgrade instructions](person-a-d1-d2-fixes.md).
+Person B should read its SQLite upgrade and historical-run handling procedure
+before integrating `codex/person-a-evidence-migration-fixes`.
+
 What to call, what is persisted, what changed in shared code, and what is still
 blocked. Read `docs/person-a-implementation.md` for how the analysis itself
 behaves.

@@ -47,7 +47,7 @@ from .types import (
     UncertaintyCause,
 )
 
-VERSION = "pipeline-2.0.0"
+VERSION = "pipeline-2.1.0"
 
 NONE_OF_THESE = "NONE_OF_THESE"
 
@@ -312,7 +312,9 @@ def ai_extract_side(document: Optional[ParsedDocument], side: str,
         proposal = services.model.extract(
             document_id=document.document_id,
             document_text=document.text,
-            location_tokens=tuple(tokens),
+            location_tokens={token: {"label": block.label, "value": block.value_text,
+                                     "context": dict(block.context), "order": block.order}
+                             for token, block in tokens.items()},
             requested_fields=tuple(requested),
         )
     except RetryableProcessingError:
@@ -326,6 +328,8 @@ def ai_extract_side(document: Optional[ParsedDocument], side: str,
     # resolves a conflict the document does not resolve.
     proposed_by_field: dict[str, list[Candidate]] = {}
     unresolved_claimed = set(proposal.unresolved_fields)
+    if proposal.document_id != document.document_id:
+        return dict(fields), 1, 0, [("AI_EXTRACTION_USED", "Model document identity was invalid")]
 
     for candidate_proposal in proposal.candidates:
         block = tokens.get(candidate_proposal.locator_token)
@@ -333,6 +337,14 @@ def ai_extract_side(document: Optional[ParsedDocument], side: str,
             continue
         field = candidate_proposal.field
         if field not in requested:
+            continue
+        # Check injected clients as well as the HTTP adapter. Never replace a
+        # contradictory model value with the value at its chosen token.
+        if (candidate_proposal.raw != block.value_text
+                or candidate_proposal.source_text != block.value_text):
+            unresolved_claimed.add(field)
+            events.append(("AI_EXTRACTION_USED",
+                           f"Model evidence disagreed with its source block for {field} on {side}"))
             continue
         if field in unresolved_claimed:
             # The response says this field is unresolved and also proposes a
@@ -384,6 +396,8 @@ def ai_extract_side(document: Optional[ParsedDocument], side: str,
     assisted = 0
 
     for field, candidates in proposed_by_field.items():
+        if field in unresolved_claimed:
+            continue
         # Identical canonical interpretations are one answer, however many times
         # the model listed them.
         distinct: list[Candidate] = []

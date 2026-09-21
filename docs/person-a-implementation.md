@@ -1,5 +1,9 @@
 # Person A — document intelligence implementation
 
+Latest update: [D1/D2 fixes and upgrade instructions](person-a-d1-d2-fixes.md)
+on `codex/person-a-evidence-migration-fixes`. That addendum supersedes the
+historical AI-token and database-upgrade limitations below.
+
 What was built, how it behaves, what it refuses to guess, and how to run it.
 
 - **Branch:** `claude/person-a-corrections`, continuing
