@@ -8,7 +8,8 @@ What was built, how it behaves, what it refuses to guess, and how to run it.
   field, enum value, review action or endpoint was introduced.
 - **Baseline before any of this work:** 15 tests passed in 21.34 s.
 - **At `58f2a7e` (first pass):** 234 tests, 96 files changed.
-- **After the correction pass (R1-R10):** 301 tests pass in 109.77 s.
+- **At `675f0d3` (first correction pass, R1-R10):** 301 tests.
+- **After the second correction pass (C1-C4):** 335 tests pass in 113.01 s.
 
 ## 1. What the pipeline does
 
@@ -57,18 +58,27 @@ heading yields no value. The internal field name `gross_weight_kg` is not
 evidence that the source number is kilograms. `MT` and `tonnes` convert; a bare
 `ton` stays ambiguous.
 
-**A port code that is not established as that port's.** The corpus contains
-`BALTIMORE, US (NGAPP)` — a Nigerian code on a US port. A parenthesised
-five-letter token is treated as supplementary only when
-`VERIFIED_PORT_CODES` establishes it as that port's code, from repeated source
-evidence (`scripts/derive_port_codes.py`, at least three observations and a
-strict majority). Country agreement alone is **not** proof:
-`PORT KLANG, MALAYSIA (MYZZZ)` has the right prefix but identifies no verified
-port, so the code carries meaning and the difference is preserved. A *verified*
-code may differ in spelling (`NHAVA SHEVA, INDIA` equals `NHAVA SHEVA, INDIA
-(INNSA)`); a *contradicted* or *unverified* one is a real difference. Ports with
-split or thin evidence (Cebu, Tuticorin) are deliberately absent from the table.
-Terminal qualifiers such as `(WESTPORT)` are never stripped.
+**A port code, at all, by default.** The corpus contains `BALTIMORE, US (NGAPP)`
+— a Nigerian code on a US port. `CORPUS_PORT_CODES` records what code each port
+is *mostly written with* in the source registry (`scripts/derive_port_codes.py`:
+at least three observations **and** a strict majority, i.e. more than half).
+
+That is a **corpus convention learned from development data**, not an external
+validation of geographic truth — the documents it is derived from are the same
+noisy artefacts being checked, and no port registry was consulted. It is
+therefore not called "verified", and `PORT_TABLE_APPROVED` is **`False`**: until
+the team records that decision, no code is discarded and every code difference
+stays visible.
+
+Country agreement alone was never proof and is no longer used as such:
+`PORT KLANG, MALAYSIA (MYZZZ)` has the right prefix but matches no recorded
+code. Ports with split or thin evidence (Cebu, Tuticorin) are absent from the
+table by design. Terminal qualifiers such as `(WESTPORT)` are never stripped.
+
+Measured cost of the conservative default: **none on this corpus.** The gate is
+exercised — 8 one-sided code comparisons across emails 516-520 — but the
+outcome counts are identical with it on or off, because those cases are already
+in review for other reasons.
 
 **A role from a filename.** `email_501_BL.txt` is a commercial invoice. Roles
 come from document headings and body content; the filename only ranks
@@ -305,3 +315,25 @@ given a regression test that fails on that commit, then fixed.
 Also fixed: a registry-level numeric convention now reaches G3 as well as
 extraction. Previously it resolved the value during extraction and was then
 rejected by the gate, producing `UNGROUNDED` — worse than either policy alone.
+
+
+## 11. Second correction pass (C1-C4)
+
+A follow-up review of `675f0d3` found four further defects. Each was reproduced,
+given a regression test that fails on that commit, then fixed.
+
+| Finding | Change |
+|---|---|
+| C1 | Resumption restored nothing: it disabled the model and reran the rules, so an AI classification silently became `GENERAL` and an AI-resolved field became unresolved — and acknowledging an AI-classified case crashed with `KeyError: 'shipper'`. The run now persists its full machine interpretation (classification, roles, every field outcome with block binding, evidence and provenance) in `run_snapshots.machine_state`, and resumption loads it instead of recomputing. A run with no recorded state refuses to resume rather than rebuilding an unverified one. |
+| C2 | Several model proposals for one field overwrote each other, so the last one won and the count double-counted. Proposals are now collected per field, identical canonical values deduplicated, and genuinely different grounded readings left `COMPETING_CANDIDATES` for a person. A field the response both proposes and disclaims is not used. |
+| C3 | `58f2a7e` and `675f0d3` shared a config identity despite changed semantics. Policy versions are now read from the modules that define them (a duplicated constant had drifted: the manifest claimed `ports-1.0.0` long after the module moved on), the tables behaviour depends on are digested into the manifest, and `CODE_RELEASE` moved to `person-a-1.2.0`. |
+| C4 | The derivation accepted 3-of-7 as a "strict majority". It now requires `top > total/2` as well as the minimum count, and the table's provenance is stated honestly and gated behind team approval. |
+
+### What resumption does and does not reconstruct
+
+It restores the machine *interpretation* from the durable snapshot and reparses
+the sources only to rebuild the artifacts the stored evidence points at, after
+verifying that the input version and the configuration identity still match. It
+does not archive the parsed artifacts themselves; if either identity has moved,
+or the snapshot is absent, it refuses and asks for a new run rather than
+guessing. No provider is ever consulted during resumption.

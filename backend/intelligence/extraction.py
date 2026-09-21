@@ -33,7 +33,7 @@ from .types import (
     UncertaintyCause,
 )
 
-VERSION = "extraction-1.0.0"
+VERSION = "extraction-1.1.0"
 
 # "Notify: SAME AS CONSIGNEE" and its variants.
 _SAME_AS_CONSIGNEE = re.compile(

@@ -21,6 +21,7 @@ from .intelligence import wire
 from .intelligence import pipeline as pipeline_module
 from .intelligence.pipeline import AnalysisContext, IntelligenceServices, analyze_case
 from .intelligence.recomputation import (
+    WorkingAnalysis,
     apply_validated_decision,
     working_state_from_analysis,
 )
@@ -104,7 +105,7 @@ def _source_manifest(snapshot) -> dict:
 
 
 def save_run_snapshot(case: schemas.Case, snapshot, analysis) -> dict:
-    """The row recording what this run was actually computed from."""
+    """The row recording what this run was computed from, and what it decided."""
     return {
         "run_id": case.run.run_id,
         "case_id": case.case_id,
@@ -116,6 +117,8 @@ def save_run_snapshot(case: schemas.Case, snapshot, analysis) -> dict:
             "classified_by": analysis.classified_by,
             "reason": analysis.classification_reason,
         }),
+        "machine_state": json.dumps(wire.machine_state_to_json(analysis)),
+        "config_manifest": json.dumps(crud.intelligence_config().manifest()),
         "created_at": _now(),
     }
 
@@ -128,46 +131,75 @@ def load_run_snapshot(db, run_id: str):
     )
 
 
+class RunStateUnavailable(PermanentProcessingError):
+    """The run's machine state was never recorded, so it cannot be resumed."""
+
+
 def load_working_state(db, case: schemas.Case, expected_run_id: str, *,
                        up_to_decision_id: Optional[str] = None):
     """The one authoritative working state, shared by validation and application.
 
-    Rebuilds the run's immutable automated analysis and replays exactly the
-    decisions already durably applied to it, in acceptance order. A pending
-    decision is never treated as applied.
+    Restores what the run actually decided — its classification, role assignment
+    and every field outcome with its block binding, evidence and provenance —
+    and then replays the decisions already durably applied to it, in order. A
+    pending decision is never treated as applied.
 
-    The run's recorded source and configuration identity is verified first: if
-    the inputs or the policy have changed since the run was computed, this fails
-    visibly rather than quietly reinterpreting a run whose machine assessment is
-    already frozen. The recorded classification is reused so no nondeterministic
-    provider call happens during human review.
+    The automated pass may have involved a model, whose answers rerunning the
+    rules would not reproduce. So the machine interpretation is *loaded*, not
+    recomputed; the sources are reparsed only to rebuild the parsed artifacts the
+    evidence points at, and their identity is verified first. If the inputs, the
+    configuration or the recorded state are not what this run used, resumption
+    fails visibly instead of quietly reinterpreting a frozen run.
     """
     stored = load_run_snapshot(db, expected_run_id)
+    if stored is None:
+        raise RunStateUnavailable(
+            f"run {expected_run_id} of {case.case_id} has no recorded machine state. "
+            "It predates machine-state persistence, so its accepted interpretation "
+            "cannot be reconstructed; reprocess the case to create a fresh run."
+        )
 
     snapshot = crud.load_input_snapshot(case.email.email_id, case.run.kind)
+
+    if stored.input_version != snapshot.input_version:
+        raise RunIdentityChanged(
+            f"the sources for {case.case_id} changed since run {expected_run_id} was "
+            f"computed ({stored.input_version} -> {snapshot.input_version}); "
+            "start a new run instead of applying a decision to changed input"
+        )
+    current_config = crud.intelligence_config().config_identity()
+    if stored.config_version != current_config:
+        raise RunIdentityChanged(
+            f"the configuration changed since run {expected_run_id} was computed "
+            f"({stored.config_version} -> {current_config}); "
+            "start a new run instead of reinterpreting under a new policy"
+        )
+    if not stored.machine_state:
+        raise RunStateUnavailable(
+            f"run {expected_run_id} recorded no machine state; it cannot be resumed"
+        )
+
     context = _build_context(case)
-    # Resumption is deterministic: no provider is consulted while replaying.
+    # Reparse only to rebuild the artifacts the stored evidence addresses. No
+    # provider is consulted, and no interpretation is redone.
     services = _build_services(snapshot)
     services.model = ai_module.DisabledModelClient()
-    analysis = analyze_case(snapshot, context, services)
+    parsed, _diagnostics = pipeline_module.parse_snapshot(snapshot, context, services)
 
-    if stored is not None:
-        if stored.input_version != analysis.input_version:
-            raise RunIdentityChanged(
-                f"the sources for {case.case_id} changed since run {expected_run_id} was "
-                f"computed ({stored.input_version} -> {analysis.input_version}); "
-                "start a new run instead of applying a decision to changed input"
-            )
-        if stored.config_version != analysis.config_version:
-            raise RunIdentityChanged(
-                f"the configuration changed since run {expected_run_id} was computed "
-                f"({stored.config_version} -> {analysis.config_version}); "
-                "start a new run instead of reinterpreting under a new policy"
-            )
-
+    restored = wire.machine_state_from_json(stored.machine_state)
     registry = crud.intelligence_registries().get(snapshot.registry_kind)
-    state = working_state_from_analysis(
-        analysis, snapshot, registry.numeric_convention() if registry else ""
+
+    state = WorkingAnalysis(
+        snapshot=snapshot,
+        parsed=parsed,
+        si_fields=dict(restored["si_fields"]),
+        bl_fields=dict(restored["bl_fields"]),
+        roles=restored["roles"],
+        category=restored["category"] or "GENERAL",
+        machine_assessment=_assessment_from_case(case),
+        machine_comparisons=(),
+        document_issues=tuple(restored["roles"].issues),
+        fallback_convention=registry.numeric_convention() if registry else "",
     )
 
     applied = _applied_decisions(db, case.case_id, expected_run_id)
@@ -178,7 +210,23 @@ def load_working_state(db, case: schemas.Case, expected_run_id: str, *,
             wire.decision_from_json(record.payload), state, context
         ).state
 
-    return state, context, snapshot, analysis, applied
+    return state, context, snapshot, restored, applied
+
+
+def _assessment_from_case(case: schemas.Case):
+    """The frozen machine assessment, as the working state carries it."""
+    from .intelligence.comparison import Assessment
+
+    assessment = case.machine_assessment
+    if assessment is None:
+        return Assessment(status="NEEDS_REVIEW", review_reason=None,
+                          has_defect=False, defect_fields=())
+    return Assessment(
+        status=assessment.status.value,
+        review_reason=assessment.review_reason.value if assessment.review_reason else None,
+        has_defect=assessment.has_defect,
+        defect_fields=tuple(f.value for f in assessment.defect_fields),
+    )
 
 
 def _run_analysis(case: schemas.Case):
@@ -259,9 +307,10 @@ def _commit_case(db, db_case, case: schemas.Case, expected_run_id: str, *,
                 sa_text(
                     "INSERT OR REPLACE INTO run_snapshots "
                     "(run_id, case_id, input_version, config_version, source_manifest, "
-                    " classification, created_at) "
+                    " classification, machine_state, config_manifest, created_at) "
                     "VALUES (:run_id, :case_id, :input_version, :config_version, "
-                    "        :source_manifest, :classification, :created_at)"
+                    "        :source_manifest, :classification, :machine_state, "
+                    "        :config_manifest, :created_at)"
                 ),
                 run_snapshot,
             )
@@ -414,7 +463,7 @@ def apply_decision(case_id: str, job_id: str = None, job_run_id: str = None):
                              if case.machine_assessment else None)
 
         try:
-            state, context, snapshot, analysis, applied_before = load_working_state(
+            state, context, snapshot, restored, applied_before = load_working_state(
                 db, case, expected_run_id
             )
         except SourceDataIssue as exc:
@@ -441,7 +490,7 @@ def apply_decision(case_id: str, job_id: str = None, job_run_id: str = None):
         # person chose is shown in the role it now occupies. The original machine
         # interpretation stays in the run snapshot for audit.
         operational_documents = _documents_with_operational_roles(
-            analysis.documents, result.state
+            restored["documents"], result.state
         )
         case.documents = wire.document_refs_to_wire(operational_documents)
 

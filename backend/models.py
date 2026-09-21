@@ -96,4 +96,12 @@ class RunSnapshotModel(Base):
     # The classification the automated pass settled on, so a resumption never
     # re-asks a nondeterministic provider.
     classification = Column(JSON, nullable=True)
+    # The full machine interpretation: roles, every field outcome with its block
+    # binding, evidence and provenance, and the document refs. Restored on
+    # resumption instead of being recomputed, because a model's contribution
+    # cannot be reproduced by rerunning the rules.
+    machine_state = Column(JSON, nullable=True)
+    # The configuration manifest this run was computed under, kept verbatim so a
+    # later implementation never relabels an old run as its own.
+    config_manifest = Column(JSON, nullable=True)
     created_at = Column(String, nullable=False)

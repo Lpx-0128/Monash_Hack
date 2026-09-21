@@ -214,3 +214,47 @@ Everything else is internal: block-bound grounding, the shared working-state
 loader, the atomic applied marker, the consent gate and the connected extraction
 path do not change any wire shape. Public document roles now reflect a human
 document choice, which is a correction to the data C was already reading.
+
+
+## 9. Second correction pass (C1-C4): what changes for you
+
+**`run_snapshots` now carries the run's machine state.** Columns `machine_state`
+and `config_manifest` hold the interpretation the run settled on and the exact
+manifest it ran under. Resumption reads them rather than recomputing, because a
+model's contribution cannot be reproduced by rerunning the rules. B should fold
+this into the run archive; it is the minimum durable state Person A needs, not a
+finished archive design.
+
+**Two more refusals on the decision route**, both `409`:
+
+- the run's inputs or configuration changed since it was computed, and
+- the run has no recorded machine state, so it cannot be resumed.
+
+Both mean the same thing for C: refetch, and reprocess if the case still needs a
+decision. Neither accepts anything, so no decision is half-applied.
+
+**Port codes are no longer treated as formatting.** `PORT_TABLE_APPROVED` is off
+until the team decides, so `SINGAPORE` and `SINGAPORE (SGSIN)` currently compare
+as different. This costs nothing measurable on the corpus (see the
+implementation doc), but C should not present a code difference as a data-entry
+defect until that decision is recorded.
+
+**AI extraction is narrower than "AI reads the documents".** It chooses among
+candidate blocks the rules already recognised. It does not interpret unknown
+field labels, and it does not recover layout the parser did not capture. When
+the model returns several different grounded readings, the field stays uncertain
+rather than being resolved.
+
+### Still not established
+
+Durable **per-run provider accounting across worker restarts**. The budget is
+charged before each call and is honoured within a run, but `_build_services`
+creates a fresh budget per invocation, so a crash-and-retry could spend again.
+That needs the same durable treatment as the decision ledger, and is B-adjacent
+persistence work rather than something to bolt on here.
+
+The model request also supplies raw document text plus opaque block tokens
+without telling the model what each token contains. That is a real integration
+weakness for a live provider: it is likely to pick poorly, not unsafely, since
+every choice is still gate-verified. Exposing token to label/text/context is
+follow-up work.

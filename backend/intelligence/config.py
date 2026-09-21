@@ -17,23 +17,84 @@ from typing import Optional
 
 from .types import PermanentProcessingError
 
-# Version identities for everything that can change an extracted value.
-CODE_RELEASE = "person-a-1.0.0"
+# The release identity of this implementation. Bump it whenever behaviour that
+# can change an extracted value changes: the manifest digest then changes too,
+# and a run computed under the old behaviour refuses to resume under the new one
+# rather than being silently reinterpreted.
+CODE_RELEASE = "person-a-1.2.0"
+
 PARSER_VERSIONS = {
     "text": "text-1.0.0",
     "pdf": "pdf-1.0.0",
     "docx": "docx-1.0.0",
     "xlsx": "xlsx-1.0.0",
 }
-POLICY_VERSIONS = {
-    "aliases": "aliases-1.0.0",
-    "ports": "ports-1.0.0",
-    "units": "units-1.0.0",
-    "normalization": "normalization-1.0.0",
-    "comparison": "comparison-1.0.0",
-    "classification": "classification-1.0.0",
-    "roles": "roles-1.0.0",
+
+# Modules whose VERSION affects an extracted value. Resolved from the modules
+# themselves rather than copied here: a duplicated constant drifts, and one did
+# — the manifest claimed ``ports-1.0.0`` long after the module moved on, so a
+# real behavioural change left the run identity untouched.
+VERSIONED_POLICY_MODULES = {
+    "aliases": ".policies.aliases",
+    "ports": ".policies.ports",
+    "normalization": ".normalization",
+    "comparison": ".comparison",
+    "classification": ".classification",
+    "roles": ".roles",
+    "extraction": ".extraction",
+    "grounding": ".grounding",
+    "recomputation": ".recomputation",
+    "pipeline": ".pipeline",
+    "ai": ".ai",
+    "wire": ".wire",
 }
+
+
+def policy_versions() -> dict:
+    """Every behaviour-affecting policy version, read from its defining module."""
+    import importlib
+
+    resolved = {}
+    for name, module_path in VERSIONED_POLICY_MODULES.items():
+        module = importlib.import_module(module_path, package=__package__)
+        version = getattr(module, "VERSION", None)
+        if not version:
+            raise PermanentProcessingError(
+                f"{module_path} declares no VERSION; the run identity would be incomplete"
+            )
+        resolved[name] = version
+    return resolved
+
+
+def policy_tables() -> dict:
+    """Digests of the tables policies read, so editing one changes the identity."""
+    import hashlib
+    import json as _json
+
+    from .policies import aliases as _aliases
+    from .policies import ports as _ports
+
+    def digest(payload) -> str:
+        blob = _json.dumps(payload, sort_keys=True, separators=(",", ":"))
+        return hashlib.sha256(blob.encode("utf-8")).hexdigest()[:16]
+
+    return {
+        "port_codes": digest(_ports.CORPUS_PORT_CODES),
+        "port_table_approved": _ports.PORT_TABLE_APPROVED,
+        "country_alpha2": digest(_ports.COUNTRY_ALPHA2),
+        "field_aliases": digest({k: list(v) for k, v in _aliases.FIELD_ALIASES.items()}),
+        "negative_labels": digest({k: list(v) for k, v in _aliases.NEGATIVE_LABELS.items()}),
+        "unit_factors": digest(_unit_factor_names()),
+    }
+
+
+def _unit_factor_names() -> dict:
+    from .normalization import AMBIGUOUS_UNITS, UNIT_FACTORS
+
+    return {
+        "factors": {unit: str(factor) for unit, factor in UNIT_FACTORS.items()},
+        "ambiguous": sorted(AMBIGUOUS_UNITS),
+    }
 
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 PROMPTS_DIR = Path(__file__).resolve().parent / "prompts"
@@ -182,7 +243,8 @@ class IntelligenceConfig:
             "config_version": self.config_version,
             "code_release": CODE_RELEASE,
             "parser_versions": dict(PARSER_VERSIONS),
-            "policy_versions": dict(POLICY_VERSIONS),
+            "policy_versions": policy_versions(),
+            "policy_tables": policy_tables(),
             "prompt_hashes": self.prompt_hashes(),
             "numeric_locale_policy": self.numeric_locale_policy,
             "source_numeric_convention": self.source_numeric_convention,

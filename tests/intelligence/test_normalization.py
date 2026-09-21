@@ -184,8 +184,13 @@ def test_no_fuzzy_similarity_merges_two_companies():
 
 # --- A-28 ports ------------------------------------------------------------
 
-def test_a28_a_consistent_port_code_is_supplementary():
-    """A code whose country matches the named country may differ in spelling only."""
+def test_a28_a_corpus_convention_code_is_supplementary_only_once_approved(monkeypatch):
+    """The corpus convention is not a verification, so it is off by default."""
+    assert port_policy.PORT_TABLE_APPROVED is False
+    # Unapproved: a code difference stays a difference.
+    assert not port_policy.equal("NHAVA SHEVA, INDIA", "NHAVA SHEVA, INDIA (INNSA)")
+
+    monkeypatch.setattr(port_policy, "PORT_TABLE_APPROVED", True)
     assert port_policy.equal("NHAVA SHEVA, INDIA", "NHAVA SHEVA, INDIA (INNSA)")
     assert port_policy.equal("SINGAPORE (SGSIN)", "SINGAPORE")
 

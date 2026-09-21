@@ -1,9 +1,21 @@
-"""Port comparison policy (``ports-2.0.0``).
+"""Port comparison policy (``ports-3.0.0``).
 
-A parenthesised five-letter token is treated as a supplementary UN/LOCODE only
-when :data:`VERIFIED_PORT_CODES` establishes that it identifies that port. That
-table is derived from repeated evidence in the source registry by
-``scripts/derive_port_codes.py``; it is not hand-tuned per case.
+A parenthesised five-letter token may be treated as supplementary formatting
+only when :data:`CORPUS_PORT_CODES` records it as the code that port is mostly
+written with, **and** the team has approved using that table
+(:data:`PORT_TABLE_APPROVED`).
+
+**What the table is.** ``scripts/derive_port_codes.py`` derives it from repeated
+evidence in the source registry: at least three observations and a strict
+majority. That makes it a *corpus convention* — what the documents being checked
+repeatedly write — learned from development data. It is **not** external
+validation of geographic truth; no live port registry was consulted, and the
+documents themselves are the noisy artefacts under examination. It is therefore
+deliberately not called "verified".
+
+**Default posture.** ``PORT_TABLE_APPROVED`` is ``False``, so no code is treated
+as supplementary and every code difference stays visible. Turning it on is a
+recorded team decision, not a tuning knob.
 
 Country agreement alone is **not** proof. ``PORT KLANG, MALAYSIA (MYZZZ)`` has a
 Malaysian prefix but names no verified port, so the code carries meaning and is
@@ -29,7 +41,7 @@ import re
 import unicodedata
 from typing import Optional
 
-VERSION = "ports-2.0.0"
+VERSION = "ports-3.0.0"
 
 # Country names appearing in source port values, with their ISO 3166-1 alpha-2
 # codes. Extending this table is a versioned policy change.
@@ -66,21 +78,31 @@ COUNTRY_ALPHA2: dict[str, str] = {
 }
 
 ABSENT = "absent"
-VERIFIED = "verified"
+# The code this port is mostly written with in the source corpus.
+CORPUS_CONVENTION = "corpus_convention"
+# The port is in the table and this is not its usual code.
 CONTRADICTED = "contradicted"
-UNVERIFIED = "unverified"
+# Nothing in the corpus establishes this code for this port.
+UNESTABLISHED = "unestablished"
 
-# Retained so existing callers keep working; ``consistent`` now means verified.
-CONSISTENT = VERIFIED
+# Whether the team has approved treating the corpus convention as supplementary
+# formatting. Until that decision is recorded, a code difference is a difference.
+PORT_TABLE_APPROVED = False
+
+# Retained so existing callers keep working.
+VERIFIED = CORPUS_CONVENTION
+UNVERIFIED = UNESTABLISHED
+CONSISTENT = CORPUS_CONVENTION
 INCONSISTENT = CONTRADICTED
 
-# Source-backed port/code evidence. Regenerate with:
+# Corpus-derived port/code convention. Provenance: learned from the development
+# source registry, not externally validated. Regenerate with:
 #   python scripts/derive_port_codes.py --source <registry> --emit-python
 # A pair is listed only when it is the strict majority reading for that port and
 # occurs at least three times. Ports whose evidence is split or thin (cebu,
 # tuticorin, "singapore, singapore") are deliberately absent, so their codes stay
 # unverified and any difference is preserved.
-VERIFIED_PORT_CODES = {
+CORPUS_PORT_CODES = {
     "apapa, nigeria": "NGAPP",                          # 10 observations
     "aqaba, jordan": "JOAQB",                           # 3 observations
     "ashdod, israel": "ILASH",                          # 7 observations
@@ -146,11 +168,11 @@ def code_state(raw: str) -> str:
     if code is None:
         return ABSENT
     place = _normalize(_CODE.sub(" ", raw))
-    expected = VERIFIED_PORT_CODES.get(place)
+    expected = CORPUS_PORT_CODES.get(place)
     if expected is None:
-        # Nothing establishes what this port's code should be.
-        return UNVERIFIED
-    return VERIFIED if code == expected else CONTRADICTED
+        # The corpus does not establish what this port's code should be.
+        return UNESTABLISHED
+    return CORPUS_CONVENTION if code == expected else CONTRADICTED
 
 
 def code_consistency(raw: str) -> str:
@@ -159,15 +181,16 @@ def code_consistency(raw: str) -> str:
 
 
 def supplementary_key(raw: str) -> Optional[str]:
-    """The value with a *verified* code removed, or ``None``.
+    """The value with a supplementary code removed, or ``None``.
 
-    ``None`` means the code has not been established as this port's, so it
-    carries meaning and full-string equality is the only comparison allowed.
+    ``None`` means the code carries meaning and full-string equality is the only
+    comparison allowed. While :data:`PORT_TABLE_APPROVED` is off, that is true of
+    every code: an unapproved corpus convention is not licence to discard one.
     """
     state = code_state(raw)
     if state == ABSENT:
         return _normalize(raw)
-    if state == VERIFIED:
+    if state == CORPUS_CONVENTION and PORT_TABLE_APPROVED:
         return _normalize(_CODE.sub(" ", raw))
     return None
 
@@ -188,3 +211,8 @@ def equal(left: str, right: str) -> bool:
     if left_code and right_code and left_code != right_code:
         return False
     return True
+
+
+# Back-compatible alias. The name changed because a corpus convention is not a
+# verification; callers should prefer CORPUS_PORT_CODES.
+VERIFIED_PORT_CODES = CORPUS_PORT_CODES

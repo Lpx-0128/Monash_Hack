@@ -263,6 +263,18 @@ def _candidate_to_json(candidate: Candidate) -> dict:
         "normalized": _normalized_to_json(candidate.normalized) if candidate.normalized else None,
         "reference_field": candidate.reference_field,
         "flags": list(candidate.flags),
+        # The block binding must survive: an unbound candidate cannot be
+        # re-grounded, so losing it here would break G1/G2 on resumption.
+        "block_id": candidate.block_id,
+        "reference_block_id": candidate.reference_block_id,
+        "components": list(candidate.components),
+        "issues": list(candidate.issues),
+        "unit_evidence": (
+            {"document_id": candidate.unit_evidence.document_id,
+             "locator": candidate.unit_evidence.locator.to_wire(),
+             "source_text": candidate.unit_evidence.source_text}
+            if candidate.unit_evidence else None
+        ),
     }
 
 
@@ -281,6 +293,16 @@ def _candidate_from_json(payload: Mapping) -> Candidate:
         normalized=_normalized_from_json(payload["normalized"]) if payload.get("normalized") else None,
         reference_field=payload.get("reference_field"),
         flags=tuple(payload.get("flags", [])),
+        block_id=payload.get("block_id"),
+        reference_block_id=payload.get("reference_block_id"),
+        components=tuple(payload.get("components", [])),
+        issues=tuple(payload.get("issues", [])),
+        unit_evidence=(
+            Evidence(payload["unit_evidence"]["document_id"],
+                     locator_from_wire(payload["unit_evidence"]["locator"]),
+                     payload["unit_evidence"]["source_text"])
+            if payload.get("unit_evidence") else None
+        ),
     )
 
 
@@ -439,3 +461,95 @@ def _normalized_from_wire(field, value) -> Optional[NormalizedValue]:
     if name == "gross_weight_kg":
         return NormalizedValue.of_decimal(Decimal(str(value)))
     return NormalizedValue.of_text(str(value))
+
+
+# ---------------------------------------------------------------------------
+# Machine-state snapshot
+# ---------------------------------------------------------------------------
+#
+# The automated pass can involve a model, whose answers are not reproducible by
+# rerunning it. Resumption therefore restores what the run actually decided
+# rather than recomputing it: the classification, the role assignment and every
+# field outcome with its block binding, evidence and provenance.
+
+def field_outcome_to_json(outcome) -> dict:
+    return {
+        "field": outcome.field,
+        "side": outcome.side,
+        "value": _candidate_to_json(outcome.value) if outcome.value else None,
+        "cause": outcome.cause.value if outcome.cause else None,
+        "detail": outcome.detail,
+        "alternatives": [_candidate_to_json(c) for c in outcome.alternatives],
+    }
+
+
+def field_outcome_from_json(payload: Mapping):
+    from .types import FieldOutcome, UncertaintyCause
+
+    return FieldOutcome(
+        field=payload["field"],
+        side=payload["side"],
+        value=_candidate_from_json(payload["value"]) if payload.get("value") else None,
+        cause=UncertaintyCause(payload["cause"]) if payload.get("cause") else None,
+        detail=payload.get("detail", ""),
+        alternatives=tuple(_candidate_from_json(c) for c in payload.get("alternatives", [])),
+    )
+
+
+def machine_state_to_json(analysis) -> dict:
+    """Everything resumption needs that rerunning the rules would not reproduce."""
+    roles = analysis.roles
+    return {
+        "category": analysis.category,
+        "classified_by": analysis.classified_by,
+        "classification_reason": analysis.classification_reason,
+        "roles": {
+            "si": roles.si if roles else None,
+            "bl": roles.bl if roles else None,
+            "issues": list(roles.issues) if roles else [],
+            "si_alternatives": list(roles.si_alternatives) if roles else [],
+            "bl_alternatives": list(roles.bl_alternatives) if roles else [],
+        },
+        "si_fields": {name: field_outcome_to_json(o) for name, o in analysis.si_fields.items()},
+        "bl_fields": {name: field_outcome_to_json(o) for name, o in analysis.bl_fields.items()},
+        "documents": [
+            {"document_id": d.document_id, "role": d.role, "filename": d.filename,
+             "media_type": d.media_type, "size_bytes": d.size_bytes,
+             "content_hash": d.content_hash, "demo_safe": d.demo_safe,
+             "parse_status": d.parse_status}
+            for d in analysis.documents
+        ],
+        "ai_calls": analysis.ai_calls,
+        "ai_assisted_fields": analysis.ai_assisted_fields,
+    }
+
+
+def machine_state_from_json(payload: Mapping) -> dict:
+    """Rehydrate the stored machine interpretation."""
+    from .pipeline import DocumentRefResult
+    from .roles import RoleResolution
+
+    roles_payload = payload.get("roles") or {}
+    roles = RoleResolution(
+        si=roles_payload.get("si"),
+        bl=roles_payload.get("bl"),
+        assessments=(),
+        si_alternatives=tuple(roles_payload.get("si_alternatives", [])),
+        bl_alternatives=tuple(roles_payload.get("bl_alternatives", [])),
+        issues=tuple(roles_payload.get("issues", [])),
+    )
+    return {
+        "category": payload.get("category"),
+        "classified_by": payload.get("classified_by"),
+        "classification_reason": payload.get("classification_reason", ""),
+        "roles": roles,
+        "si_fields": {k: field_outcome_from_json(v)
+                      for k, v in (payload.get("si_fields") or {}).items()},
+        "bl_fields": {k: field_outcome_from_json(v)
+                      for k, v in (payload.get("bl_fields") or {}).items()},
+        "documents": tuple(
+            DocumentRefResult(**d) for d in payload.get("documents", [])
+        ),
+        "ai_calls": payload.get("ai_calls", 0),
+        "ai_assisted_fields": payload.get("ai_assisted_fields", 0),
+    }

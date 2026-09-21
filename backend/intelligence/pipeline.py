@@ -47,7 +47,7 @@ from .types import (
     UncertaintyCause,
 )
 
-VERSION = "pipeline-1.0.0"
+VERSION = "pipeline-2.0.0"
 
 NONE_OF_THESE = "NONE_OF_THESE"
 
@@ -321,14 +321,25 @@ def ai_extract_side(document: Optional[ParsedDocument], side: str,
                        f"Model extraction for the {side} was unavailable"))
         return dict(fields), 1, 0, events
 
-    updated = dict(fields)
-    assisted = 0
+    # Collect every validated proposal per field *before* touching any outcome.
+    # Overwriting as they arrive would make the last entry win, which silently
+    # resolves a conflict the document does not resolve.
+    proposed_by_field: dict[str, list[Candidate]] = {}
+    unresolved_claimed = set(proposal.unresolved_fields)
+
     for candidate_proposal in proposal.candidates:
         block = tokens.get(candidate_proposal.locator_token)
         if block is None:
             continue
         field = candidate_proposal.field
         if field not in requested:
+            continue
+        if field in unresolved_claimed:
+            # The response says this field is unresolved and also proposes a
+            # value for it. That is not a result we can act on.
+            events.append(("AI_EXTRACTION_USED",
+                           f"The model both proposed and disclaimed {field} on the "
+                           f"{side}; the response was not used for it"))
             continue
 
         outcome = fields.get(field)
@@ -345,7 +356,6 @@ def ai_extract_side(document: Optional[ParsedDocument], side: str,
                            f"A model proposal for {field} on the {side} pointed outside "
                            "the document's own candidates and was discarded"))
             continue
-        normalized = chosen.normalized
 
         candidate = Candidate(
             field=field, side=side, document_id=document.document_id,
@@ -354,7 +364,7 @@ def ai_extract_side(document: Optional[ParsedDocument], side: str,
                                block.value_text),),
             derivation=(Derivation.TOTAL if candidate_proposal.derivation == "TOTAL"
                         else Derivation.DIRECT),
-            method=ExtractionMethod.AI, normalized=normalized,
+            method=ExtractionMethod.AI, normalized=chosen.normalized,
             flags=("AI_PROPOSED",), block_id=block.block_id,
         )
         ref = snapshot.source_by_id(document.document_id)
@@ -368,8 +378,39 @@ def ai_extract_side(document: Optional[ParsedDocument], side: str,
                            f"A model proposal for {field} on the {side} failed "
                            f"{result.gate} and was discarded"))
             continue
+        proposed_by_field.setdefault(field, []).append(candidate)
 
-        updated[field] = FieldOutcome(field=field, side=side, value=candidate)
+    updated = dict(fields)
+    assisted = 0
+
+    for field, candidates in proposed_by_field.items():
+        # Identical canonical interpretations are one answer, however many times
+        # the model listed them.
+        distinct: list[Candidate] = []
+        for candidate in candidates:
+            if not any(candidate.normalized.equals(seen.normalized) for seen in distinct):
+                distinct.append(candidate)
+
+        if len(distinct) > 1:
+            # Several grounded but different readings. Each is genuinely in the
+            # document; nothing here establishes which is the intended current
+            # value, so the field stays uncertain for a person.
+            events.append((
+                "AI_EXTRACTION_USED",
+                f"The model returned {len(distinct)} different grounded readings for "
+                f"{field} on the {side}; the field remains uncertain",
+            ))
+            existing = fields[field]
+            updated[field] = FieldOutcome(
+                field=field, side=side,
+                cause=UncertaintyCause.COMPETING_CANDIDATES,
+                detail="the model did not resolve which of the document's readings applies",
+                alternatives=existing.alternatives or tuple(distinct),
+            )
+            continue
+
+        updated[field] = FieldOutcome(field=field, side=side, value=distinct[0])
+        # Count fields actually resolved, not proposal entries.
         assisted += 1
         events.append(("AI_EXTRACTION_USED",
                        f"{field} on the {side} was resolved with model assistance"))

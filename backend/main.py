@@ -466,6 +466,11 @@ def submit_decision(
         # accepted-decision budget. The review stays OPEN.
         raise HTTPException(status_code=422,
                             detail={"code": exc.code, "message": exc.message})
+    except worker.RunStateUnavailable as exc:
+        raise HTTPException(
+            status_code=409,
+            detail={"code": schemas.ErrorCode.STALE_RUN.value, "message": str(exc)},
+        )
     except worker.RunIdentityChanged as exc:
         # The run can no longer be reasoned about; reprocessing is the remedy.
         raise HTTPException(
@@ -513,7 +518,7 @@ def _decision_state(schema_case: schemas.Case, db: Session):
     a freshly rerun analysis instead would ignore an earlier accepted document
     choice and reject a value the chosen document genuinely supports.
     """
-    state, _context, _snapshot, _analysis, _applied = worker.load_working_state(
+    state, _context, _snapshot, _restored, _applied = worker.load_working_state(
         db, schema_case, schema_case.run.run_id
     )
     return state

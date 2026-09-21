@@ -31,7 +31,7 @@ from .types import (
     ParseStatus,
 )
 
-VERSION = "grounding-1.0.0"
+VERSION = "grounding-2.0.0"
 
 
 # ---------------------------------------------------------------------------

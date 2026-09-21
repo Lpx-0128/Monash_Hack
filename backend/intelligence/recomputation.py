@@ -56,7 +56,7 @@ from .types import (
     UncertaintyCause,
 )
 
-VERSION = "recomputation-1.0.0"
+VERSION = "recomputation-1.1.0"
 
 # Contract error codes this module can require.
 INVALID_VALUE = "INVALID_VALUE"
