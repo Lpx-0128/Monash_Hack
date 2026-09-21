@@ -333,6 +333,7 @@ def find_document_support(field: str, side: str, document: ParsedDocument,
             evidence=(Evidence(document.document_id, block.value_locator, block.value_text),),
             derivation=Derivation.DIRECT, method=ExtractionMethod.HUMAN,
             normalized=proposed, flags=tuple(flags), unit_evidence=unit_evidence,
+            block_id=block.block_id,
         )
         # G1 and G2 must still pass. G3 is satisfied by construction here — the
         # proposal equals one of the document's own admissible readings — so it

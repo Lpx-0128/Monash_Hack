@@ -92,6 +92,7 @@ def collect_candidates(document: ParsedDocument, side: str, *,
                 field=field, side=side, document_id=document.document_id, raw=raw,
                 label_text=block.label, evidence=evidence, derivation=derivation,
                 method=ExtractionMethod.RULE, normalized=None, issues=tuple(issues),
+                block_id=block.block_id,
             ))
             continue
 
@@ -168,6 +169,7 @@ def collect_candidates(document: ParsedDocument, side: str, *,
             method=ExtractionMethod.RULE, normalized=normalized,
             reference_field=reference_field, components=components,
             flags=tuple(flags), issues=tuple(issues), unit_evidence=unit_evidence,
+            block_id=block.block_id,
         ))
 
     return by_field
@@ -198,6 +200,7 @@ def resolve_references(by_field: dict[str, list[Candidate]]) -> dict[str, list[C
             derivation=Derivation.REFERENCE, method=candidate.method,
             normalized=consignee.normalized, reference_field="consignee",
             flags=candidate.flags, issues=candidate.issues,
+            block_id=candidate.block_id, reference_block_id=consignee.block_id,
         ))
     if "notify_party" in by_field:
         by_field["notify_party"] = resolved
@@ -296,6 +299,7 @@ def resolve_field(field: str, side: str, candidates: Sequence[Candidate],
         reference_field=first.reference_field, components=first.components,
         flags=tuple(dict.fromkeys(f for c in usable for f in c.flags)),
         issues=first.issues, unit_evidence=first.unit_evidence,
+        block_id=first.block_id, reference_block_id=first.reference_block_id,
     )
     return FieldOutcome(field=field, side=side, value=merged)
 

@@ -203,6 +203,15 @@ class ParsedDocument:
     filename: str = ""
 
     # -- grounding support -------------------------------------------------
+    def block_by_id(self, block_id: Optional[str]):
+        """The private structural block with this id, or ``None``."""
+        if block_id is None:
+            return None
+        for block in self.blocks:
+            if block.block_id == block_id:
+                return block
+        return None
+
     def locator_texts(self, locator: Locator) -> tuple[str, ...]:
         """Every persisted text addressed by ``locator``.
 
@@ -346,6 +355,12 @@ class Candidate:
     flags: tuple[str, ...] = ()
     issues: tuple[str, ...] = ()
     unit_evidence: Optional[Evidence] = None
+    # The private parser block this value was read from. Grounding resolves the
+    # label and the source text through this block, never through the candidate's
+    # own claims, so a page-level public locator cannot stand in as proof of a
+    # label/value relationship.
+    block_id: Optional[str] = None
+    reference_block_id: Optional[str] = None
 
     def with_normalized(self, value: Optional[NormalizedValue], *,
                         flags: Sequence[str] = (), issues: Sequence[str] = ()) -> "Candidate":

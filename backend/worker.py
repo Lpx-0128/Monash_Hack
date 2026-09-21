@@ -18,6 +18,7 @@ from sqlalchemy import text as sa_text
 from . import crud, database, models, schemas
 from .intelligence import ai as ai_module
 from .intelligence import wire
+from .intelligence import pipeline as pipeline_module
 from .intelligence.pipeline import AnalysisContext, IntelligenceServices, analyze_case
 from .intelligence.recomputation import (
     apply_validated_decision,
@@ -70,62 +71,205 @@ def _build_context(case: schemas.Case) -> AnalysisContext:
     )
 
 
-def _build_services() -> IntelligenceServices:
+def _build_services(snapshot=None) -> IntelligenceServices:
+    """Services for one run.
+
+    When the snapshot's registry has no provider consent, no provider client is
+    constructed at all. The pipeline enforces the same rule again before sending
+    anything, so neither layer alone is the only thing standing between
+    participant correspondence and an external service.
+    """
     config = crud.intelligence_config()
+    consent_required = (
+        snapshot is not None
+        and snapshot.registry_kind in pipeline_module.CONSENT_REQUIRED_REGISTRIES
+    )
+    if consent_required and not config.ai.allow_participant_content:
+        model = ai_module.DisabledModelClient()
+    else:
+        model = ai_module.build_model_client(config.ai)
     return IntelligenceServices(
         registries=crud.intelligence_registries(),
-        model=ai_module.build_model_client(config.ai),
+        model=model,
         budget=ai_module.CallBudget(limit=config.ai.max_calls_per_run),
     )
+
+
+class RunIdentityChanged(PermanentProcessingError):
+    """The run's inputs or configuration are no longer what it was computed from."""
+
+
+def _source_manifest(snapshot) -> dict:
+    return {ref.document_id: (ref.content_hash or "") for ref in snapshot.sources}
+
+
+def save_run_snapshot(case: schemas.Case, snapshot, analysis) -> dict:
+    """The row recording what this run was actually computed from."""
+    return {
+        "run_id": case.run.run_id,
+        "case_id": case.case_id,
+        "input_version": analysis.input_version,
+        "config_version": analysis.config_version,
+        "source_manifest": json.dumps(_source_manifest(snapshot)),
+        "classification": json.dumps({
+            "category": analysis.category,
+            "classified_by": analysis.classified_by,
+            "reason": analysis.classification_reason,
+        }),
+        "created_at": _now(),
+    }
+
+
+def load_run_snapshot(db, run_id: str):
+    return (
+        db.query(models.RunSnapshotModel)
+        .filter(models.RunSnapshotModel.run_id == run_id)
+        .first()
+    )
+
+
+def load_working_state(db, case: schemas.Case, expected_run_id: str, *,
+                       up_to_decision_id: Optional[str] = None):
+    """The one authoritative working state, shared by validation and application.
+
+    Rebuilds the run's immutable automated analysis and replays exactly the
+    decisions already durably applied to it, in acceptance order. A pending
+    decision is never treated as applied.
+
+    The run's recorded source and configuration identity is verified first: if
+    the inputs or the policy have changed since the run was computed, this fails
+    visibly rather than quietly reinterpreting a run whose machine assessment is
+    already frozen. The recorded classification is reused so no nondeterministic
+    provider call happens during human review.
+    """
+    stored = load_run_snapshot(db, expected_run_id)
+
+    snapshot = crud.load_input_snapshot(case.email.email_id, case.run.kind)
+    context = _build_context(case)
+    # Resumption is deterministic: no provider is consulted while replaying.
+    services = _build_services(snapshot)
+    services.model = ai_module.DisabledModelClient()
+    analysis = analyze_case(snapshot, context, services)
+
+    if stored is not None:
+        if stored.input_version != analysis.input_version:
+            raise RunIdentityChanged(
+                f"the sources for {case.case_id} changed since run {expected_run_id} was "
+                f"computed ({stored.input_version} -> {analysis.input_version}); "
+                "start a new run instead of applying a decision to changed input"
+            )
+        if stored.config_version != analysis.config_version:
+            raise RunIdentityChanged(
+                f"the configuration changed since run {expected_run_id} was computed "
+                f"({stored.config_version} -> {analysis.config_version}); "
+                "start a new run instead of reinterpreting under a new policy"
+            )
+
+    registry = crud.intelligence_registries().get(snapshot.registry_kind)
+    state = working_state_from_analysis(
+        analysis, snapshot, registry.numeric_convention() if registry else ""
+    )
+
+    applied = _applied_decisions(db, case.case_id, expected_run_id)
+    for record in applied:
+        if up_to_decision_id is not None and record.decision_id == up_to_decision_id:
+            continue
+        state = apply_validated_decision(
+            wire.decision_from_json(record.payload), state, context
+        ).state
+
+    return state, context, snapshot, analysis, applied
 
 
 def _run_analysis(case: schemas.Case):
     """Ingest and analyze outside any database write transaction."""
     snapshot = crud.load_input_snapshot(case.email.email_id, case.run.kind)
     context = _build_context(case)
-    services = _build_services()
+    services = _build_services(snapshot)
     analysis = analyze_case(snapshot, context, services)
     return snapshot, context, services, analysis
 
 
-def _commit_case(db, db_case, case: schemas.Case, expected_run_id: str) -> bool:
-    """Write the case only while it still belongs to ``expected_run_id``.
+def _commit_case(db, db_case, case: schemas.Case, expected_run_id: str, *,
+                 mark_decision_applied: Optional[str] = None,
+                 run_snapshot: Optional[dict] = None) -> bool:
+    """Write the case, and optionally its applied marker, in one transaction.
 
-    The guard and the mutation share one transaction, so a superseded worker
-    cannot write into a newer run.
+    The run guard and every mutation share a single transaction, so a superseded
+    worker cannot write into a newer run, and a crash cannot leave a visible
+    applied result whose decision still looks pending. A zero-row conditional
+    update marks nothing and reports failure.
     """
     case_data = case.model_dump(mode="json", by_alias=True)
-    updated = db.execute(
-        sa_text(
-            "UPDATE cases SET workflow_status=:workflow_status, machine_assessment=:machine_assessment, "
-            "resolution=:resolution, follow_up=:follow_up, updated_at=:updated_at, "
-            "completed_at=:completed_at, email=:email, documents=:documents, "
-            "fields_data=:fields_data, review=:review, failure=:failure, history=:history, "
-            "metrics=:metrics "
-            "WHERE case_id=:case_id AND json_extract(run, '$.run_id')=:expected_run_id"
-        ),
-        {
-            "workflow_status": case_data["workflow_status"],
-            "machine_assessment": _json(case_data.get("machine_assessment")),
-            "resolution": _json(case_data.get("resolution")),
-            "follow_up": case_data.get("follow_up"),
-            "updated_at": case_data["updated_at"],
-            "completed_at": case_data.get("completed_at"),
-            "email": _json(case_data["email"]),
-            "documents": _json(case_data.get("documents", [])),
-            "fields_data": _json(case_data.get("fields", [])),
-            "review": _json(case_data.get("review")),
-            "failure": _json(case_data.get("failure")),
-            "history": _json(case_data.get("history", [])),
-            "metrics": _json(case_data["metrics"]),
-            "case_id": case.case_id,
-            "expected_run_id": expected_run_id,
-        },
-    ).rowcount
-    db.commit()
-    if updated == 0:
-        logger.info("case %s was superseded; the write was rejected", case.case_id)
-        return False
+    try:
+        updated = db.execute(
+            sa_text(
+                "UPDATE cases SET workflow_status=:workflow_status, "
+                "machine_assessment=:machine_assessment, resolution=:resolution, "
+                "follow_up=:follow_up, updated_at=:updated_at, completed_at=:completed_at, "
+                "run=:run, email=:email, documents=:documents, fields_data=:fields_data, "
+                "review=:review, failure=:failure, history=:history, metrics=:metrics "
+                "WHERE case_id=:case_id AND json_extract(run, '$.run_id')=:expected_run_id"
+            ),
+            {
+                "workflow_status": case_data["workflow_status"],
+                "machine_assessment": _json(case_data.get("machine_assessment")),
+                "resolution": _json(case_data.get("resolution")),
+                "follow_up": case_data.get("follow_up"),
+                "updated_at": case_data["updated_at"],
+                "completed_at": case_data.get("completed_at"),
+                "run": _json(case_data["run"]),
+                "email": _json(case_data["email"]),
+                "documents": _json(case_data.get("documents", [])),
+                "fields_data": _json(case_data.get("fields", [])),
+                "review": _json(case_data.get("review")),
+                "failure": _json(case_data.get("failure")),
+                "history": _json(case_data.get("history", [])),
+                "metrics": _json(case_data["metrics"]),
+                "case_id": case.case_id,
+                "expected_run_id": expected_run_id,
+            },
+        ).rowcount
+
+        if updated == 0:
+            # Superseded. Nothing is written, and no decision is marked applied.
+            db.rollback()
+            logger.info("case %s was superseded; the write was rejected", case.case_id)
+            return False
+
+        if mark_decision_applied is not None:
+            marked = db.execute(
+                sa_text(
+                    "UPDATE accepted_decisions SET applied_at=:at "
+                    "WHERE decision_id=:decision_id AND run_id=:run_id "
+                    "AND applied_at IS NULL"
+                ),
+                {"at": case_data["updated_at"], "decision_id": mark_decision_applied,
+                 "run_id": expected_run_id},
+            ).rowcount
+            if marked == 0:
+                # Another worker applied it first; this whole attempt is discarded.
+                db.rollback()
+                logger.info("decision %s was already applied; discarding",
+                            mark_decision_applied)
+                return False
+
+        if run_snapshot is not None:
+            db.execute(
+                sa_text(
+                    "INSERT OR REPLACE INTO run_snapshots "
+                    "(run_id, case_id, input_version, config_version, source_manifest, "
+                    " classification, created_at) "
+                    "VALUES (:run_id, :case_id, :input_version, :config_version, "
+                    "        :source_manifest, :classification, :created_at)"
+                ),
+                run_snapshot,
+            )
+
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise
     db.expire_all()
     return True
 
@@ -224,7 +368,8 @@ def process_case(case_id: str, job_id: str = None, job_run_id: str = None):
 
         case.resolution = None   # no human action has been applied yet
         case.updated_at = now
-        _commit_case(db, db_case, case, expected_run_id)
+        _commit_case(db, db_case, case, expected_run_id,
+                     run_snapshot=save_run_snapshot(case, snapshot, analysis))
     except (RetryableProcessingError, PermanentProcessingError):
         db.rollback()
         raise
@@ -264,30 +409,18 @@ def apply_decision(case_id: str, job_id: str = None, job_run_id: str = None):
                 f"no accepted decision record is bound to job {job_id} on run {expected_run_id}"
             )
 
-        applied_before = _applied_decisions(db, case_id, expected_run_id)
-
         # The original machine assessment must survive this resumption untouched.
         frozen_assessment = (case.machine_assessment.model_dump(mode="json")
                              if case.machine_assessment else None)
 
         try:
-            snapshot, context, services, analysis = _run_analysis(case)
+            state, context, snapshot, analysis, applied_before = load_working_state(
+                db, case, expected_run_id
+            )
         except SourceDataIssue as exc:
             raise PermanentProcessingError(
                 f"the input for {case_id} could not be re-read: {exc}"
             ) from exc
-
-        registry = crud.intelligence_registries().get(snapshot.registry_kind)
-        state = working_state_from_analysis(
-            analysis, snapshot, registry.numeric_convention() if registry else ""
-        )
-
-        # Replay decisions already applied to this run, in acceptance order, so
-        # the working state matches what was durably committed before.
-        for earlier in applied_before:
-            state = apply_validated_decision(
-                wire.decision_from_json(earlier.payload), state, context
-            ).state
 
         decision = wire.decision_from_json(record.payload)
         result = apply_validated_decision(decision, state, context)
@@ -304,11 +437,20 @@ def apply_decision(case_id: str, job_id: str = None, job_run_id: str = None):
         overrides = _override_map(applied_before + [record])
         case.fields = wire.comparisons_to_wire(result.comparisons, overrides)
 
+        # Public document roles follow the operational state, so a document a
+        # person chose is shown in the role it now occupies. The original machine
+        # interpretation stays in the run snapshot for audit.
+        operational_documents = _documents_with_operational_roles(
+            analysis.documents, result.state
+        )
+        case.documents = wire.document_refs_to_wire(operational_documents)
+
         if result.review is not None:
             review_id = f"rev_{uuid.uuid4().hex[:8]}"
             case.review = wire.review_to_wire(
                 result.review, review_id=review_id, case_id=case.case_id,
-                run_id=case.run.run_id, created_at=now, documents=analysis.documents,
+                run_id=case.run.run_id, created_at=now,
+                documents=operational_documents,
             )
             _event(case, schemas.HistoryEventType.REVIEW_CREATED.value,
                    f"Review created: {result.review.scope}/{result.review.ui_mode}", at=now)
@@ -340,8 +482,11 @@ def apply_decision(case_id: str, job_id: str = None, job_run_id: str = None):
                 "the machine assessment changed during decision resumption"
             )
 
-        if _commit_case(db, db_case, case, expected_run_id):
-            _mark_decision_applied(db, record.decision_id, now)
+        # The case write and the applied marker share one transaction, so a
+        # crash between them cannot produce a visible result that still looks
+        # pending and would be applied a second time on retry.
+        _commit_case(db, db_case, case, expected_run_id,
+                     mark_decision_applied=record.decision_id)
     except (RetryableProcessingError, PermanentProcessingError):
         db.rollback()
         raise
@@ -352,17 +497,49 @@ def apply_decision(case_id: str, job_id: str = None, job_run_id: str = None):
         db.close()
 
 
+def _documents_with_operational_roles(documents, state):
+    """Document refs re-labelled from the current working roles.
+
+    Exactly one document occupies each role, and the side that was not chosen is
+    left as the automated pass found it.
+    """
+    import dataclasses
+
+    if state is None or state.roles is None:
+        return documents
+    si_id = state.roles.si
+    bl_id = state.roles.bl
+    rebuilt = []
+    for document in documents:
+        if document.document_id == si_id:
+            role = "SI"
+        elif document.document_id == bl_id:
+            role = "BL"
+        elif document.role in ("SI", "BL"):
+            # It held a role the human decision moved elsewhere.
+            role = "OTHER"
+        else:
+            role = document.role
+        rebuilt.append(dataclasses.replace(document, role=role))
+    return rebuilt
+
+
 def _load_pending_decision(db, case_id: str, run_id: str, job_id: Optional[str]):
+    """The decision bound to this exact job, or ``None``.
+
+    When a job id is supplied it must match exactly. An unknown, wrong or
+    already-applied job never falls through to consume a different pending
+    decision — that would let a stale retry apply work it was not accepted for.
+    """
     query = (
         db.query(models.AcceptedDecisionModel)
         .filter(models.AcceptedDecisionModel.case_id == case_id)
         .filter(models.AcceptedDecisionModel.run_id == run_id)
         .filter(models.AcceptedDecisionModel.applied_at.is_(None))
     )
-    if job_id:
-        bound = query.filter(models.AcceptedDecisionModel.job_id == job_id).first()
-        if bound is not None:
-            return bound
+    if job_id is not None:
+        return query.filter(models.AcceptedDecisionModel.job_id == job_id).first()
+    # No job id: an explicit maintenance path, ordered and still run-bound.
     return query.order_by(models.AcceptedDecisionModel.sequence).first()
 
 
@@ -373,7 +550,7 @@ def _has_applied_decision(db, case_id: str, run_id: str, job_id: Optional[str]) 
         .filter(models.AcceptedDecisionModel.run_id == run_id)
         .filter(models.AcceptedDecisionModel.applied_at.isnot(None))
     )
-    if job_id:
+    if job_id is not None:
         query = query.filter(models.AcceptedDecisionModel.job_id == job_id)
     return query.first() is not None
 
@@ -387,17 +564,6 @@ def _applied_decisions(db, case_id: str, run_id: str) -> list:
         .order_by(models.AcceptedDecisionModel.sequence)
         .all()
     )
-
-
-def _mark_decision_applied(db, decision_id: str, at: str) -> None:
-    db.execute(
-        sa_text(
-            "UPDATE accepted_decisions SET applied_at=:at "
-            "WHERE decision_id=:decision_id AND applied_at IS NULL"
-        ),
-        {"at": at, "decision_id": decision_id},
-    )
-    db.commit()
 
 
 def _override_map(records) -> dict:

@@ -84,19 +84,26 @@ def test_a19_an_out_of_bounds_locator_fails_g1(document, candidates):
         good, evidence=(Evidence("si_doc", TextRange(10 ** 6, 10 ** 6 + 5), "ACME"),)
     )
     result = check_g1(bogus, document)
-    assert not result.passed and result.reason == "LOCATOR_NOT_FOUND"
+    # The locator no longer addresses the bound block's value span.
+    assert not result.passed
+    assert result.reason in ("EVIDENCE_NOT_IN_BOUND_BLOCK", "LOCATOR_NOT_FOUND")
 
 
 def test_a19_a_wrong_page_fails_g1(parse_demo):
+    """A page the value does not live on fails, even bound to a real block."""
+    from backend.intelligence.policies import aliases
+
     document = parse_demo("demo_pdf_BL.pdf", document_id="pdf_doc")
+    block = next(b for b in document.blocks if aliases.match_field(b.label) == "shipper")
     candidate = Candidate(
         field="shipper", side="BL", document_id="pdf_doc",
-        raw="NORTHWIND PAPER EXPORTS PTE LTD", label_text="SHIPPER",
-        evidence=(Evidence("pdf_doc", PdfPage(9), "NORTHWIND PAPER EXPORTS PTE LTD"),),
+        raw=block.value_text, label_text=block.label,
+        evidence=(Evidence("pdf_doc", PdfPage(9), block.value_text),),
         normalized=NormalizedValue.of_text("northwind paper exports pte ltd"),
+        block_id=block.block_id,
     )
     result = check_g1(candidate, document)
-    assert not result.passed and result.reason == "LOCATOR_NOT_FOUND"
+    assert not result.passed and result.reason == "EVIDENCE_NOT_IN_BOUND_BLOCK"
 
 
 def test_a20_matching_digits_in_a_seal_field_fail_g2(document):
@@ -108,7 +115,9 @@ def test_a20_matching_digits_in_a_seal_field_fail_g2(document):
             raw=block.value_text, label_text=label,
             evidence=(Evidence("si_doc", block.value_locator, block.value_text),),
             normalized=NormalizedValue.of_decimal(Decimal("18500")),
+            block_id=block.block_id,
         )
+        # The quote really is in that block, so G1 passes and G2 must reject it.
         assert check_g1(candidate, document).passed, label
         result = check_g2(candidate, document)
         assert not result.passed, f"{label} wrongly supported a gross weight"
@@ -127,10 +136,23 @@ def test_a20_the_same_rejection_applies_to_a_human_proposal(document):
     assert supported is None
 
 
-def test_a20_a_value_with_no_label_fails_g2(document, candidates):
-    good = _one(candidates, "shipper")
-    unlabelled = dataclasses.replace(good, label_text=None)
-    result = check_g2(unlabelled, document)
+def test_a20_a_value_with_no_label_fails_g2(document, parse):
+    """A value read from a block that carries no label cannot support a field."""
+    from backend.intelligence.types import Block, TextRange as TR
+
+    text = "JUST A BARE LINE OF TEXT\n"
+    bare = parse(text.encode("utf-8"), document_id="bare_doc")
+    unlabelled_block = Block(block_id="b_bare", label=None, value_text="JUST A BARE LINE OF TEXT",
+                             value_locator=TR(0, 24))
+    artifact = dataclasses.replace(bare, blocks=(unlabelled_block,))
+    candidate = Candidate(
+        field="shipper", side="SI", document_id="bare_doc",
+        raw="JUST A BARE LINE OF TEXT", label_text="Shipper",
+        evidence=(Evidence("bare_doc", TR(0, 24), "JUST A BARE LINE OF TEXT"),),
+        normalized=NormalizedValue.of_text("just a bare line of text"),
+        block_id="b_bare",
+    )
+    result = check_g2(candidate, artifact)
     assert not result.passed and result.reason == "NO_LABEL"
 
 

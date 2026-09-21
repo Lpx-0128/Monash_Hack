@@ -66,7 +66,10 @@ Narrow, and listed so ownership stays clear.
 | `backend/crud.py` | `update_case_with_decision` commits case, accepted decision and job together | A, in B's area |
 | `backend/crud.py` | `reprocess_case_atomic` also deletes unapplied decisions from the superseded run | A, in B's area |
 | `backend/models.py` | New `accepted_decisions` table: stable identity, immutable payload, run/review/job binding, `applied_at` marker | **B's area, minimally filled** |
-| `backend/main.py` | Decision route validates through Person A, returns `PROCESSING` for every accepted action including acknowledgment, and no longer writes an optimistic `final_status=OK` | A + B |
+| `backend/main.py` | Decision route validates through Person A against the shared working state, returns `PROCESSING` for every accepted action including acknowledgment, and no longer writes an optimistic `final_status=OK` | A + B |
+| `backend/main.py` | Reprocess pins real input/config identities instead of `v1` placeholders | A |
+| `backend/models.py` | New `run_snapshots` table: each run's input and config identity, source manifest and settled classification | **B's area, minimally filled** |
+| `backend/worker.py` | `load_working_state` is the one loader validation and application share; `_commit_case` writes the case, the applied marker and the run snapshot in one transaction | A, in B's area |
 | `backend/main.py` | Document endpoint serves registered bytes by verified identity, or 404s; no placeholder text, no filename lookup | A + B |
 | `backend/main.py` | `POST /cases` and `/cases/batch` refuse an unregistered email id | A |
 | `backend/requirements.txt` | Pinned to the tested set; added `pypdf`, `python-docx`, `openpyxl` | A |
@@ -80,10 +83,16 @@ The shared contract, the PRDs and the frontend branch were **not** modified.
   now carry real reproducible identities instead of `"v1"`.
 - **`jobs`** — unchanged.
 - **`accepted_decisions`** — new. The worker applies *this* record; it never
-  rediscovers a decision by scanning history, and there is no default value.
-  `applied_at` is the idempotency marker, so a retry after a crash re-applies
-  nothing. Replay is deterministic: the worker re-derives the automated pass
-  from the immutable input and replays applied decisions in sequence.
+  rediscovers a decision by scanning history, and there is no default value. A
+  supplied job id must match its decision exactly — an unknown or already-applied
+  job never consumes a different pending decision. `applied_at` is the
+  idempotency marker and is written **in the same transaction as the case**, so a
+  crash between them cannot leave a visible result that a retry applies twice.
+- **`run_snapshots`** — new. The input version, config version, source manifest
+  and settled classification of each run. Validation and resumption verify the
+  current inputs still match before applying anything; if the sources or the
+  policy have moved, the decision is refused with `STALE_RUN` and the case needs
+  a new run. Replay is deterministic and never consults a provider.
 
 The machine assessment is snapshotted before a decision is applied and compared
 afterwards; a change raises rather than silently overwriting a frozen result.
@@ -177,8 +186,31 @@ Stated plainly so nobody reads more into this change than it earned:
 - **No held-out evaluation.** The corpus was inspected structurally while
   building the rules, so these numbers are development-exposed, not held out.
 
-The one real review handshake is demonstrated through local authenticated API
-integration tests (`tests/integration/test_decision_flow.py`): a real backend
-outcome, a real review, a real human decision, durable acceptance, worker
-resumption and an updated case. The live Telegram and cloud requirement is
-**pending**, not passed.
+The one real review handshake is demonstrated through local API integration
+tests (`tests/integration/test_decision_flow.py`): a real backend outcome, a
+real review, a real human decision, durable acceptance, worker resumption and an
+updated case. **These tests are not authenticated** — no authentication exists
+yet, and the actor identity they send is unverified. The live Telegram and cloud
+requirement is **pending**, not passed.
+
+
+## 8. Correction pass, and what it changes for you
+
+Ten review findings (R1-R10) were fixed on `claude/person-a-corrections`. Two
+affect how B and C integrate:
+
+**A new table, `run_snapshots`.** It has a foreign key to `cases`, so anything
+that deletes cases must delete from it first — the test isolation fixture in
+`tests/conftest.py` shows the ordering. B should fold it into whatever run
+archive it builds rather than treating it as a permanent Person A structure.
+
+**A new refusal on the decision route.** `POST /reviews/{id}/decision` can now
+return `409 STALE_RUN` because the run's *inputs or configuration* changed since
+it was computed, not only because the run id is stale. The message says which.
+C should treat it the same way as any stale-run conflict: refetch the case and,
+if needed, reprocess.
+
+Everything else is internal: block-bound grounding, the shared working-state
+loader, the atomic applied marker, the consent gate and the connected extraction
+path do not change any wire shape. Public document roles now reflect a human
+document choice, which is a correction to the data C was already reading.

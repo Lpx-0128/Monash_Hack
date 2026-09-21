@@ -53,7 +53,8 @@ def isolate_database():
     """Empty every table before each test, so results never depend on test order."""
     db = SessionLocal()
     try:
-        for table in ("accepted_decisions", "jobs", "cases"):
+        # Child tables first: foreign keys are enforced.
+        for table in ("run_snapshots", "accepted_decisions", "jobs", "cases"):
             db.execute(text(f"DELETE FROM {table}"))
         db.commit()
     finally:

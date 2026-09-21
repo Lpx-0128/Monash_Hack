@@ -32,6 +32,10 @@ from .parsers.router import parse_source
 from .roles import RoleResolution, filename_hint, resolve_roles
 from .types import (
     CANONICAL_FIELDS,
+    ExtractionMethod,
+    Derivation,
+    Evidence,
+    NormalizedValue,
     Candidate,
     Diagnostic,
     FieldOutcome,
@@ -205,7 +209,8 @@ def _document_refs(snapshot: InputSnapshot, parsed: Mapping[str, ParsedDocument]
 # ---------------------------------------------------------------------------
 
 def _ground_side(fields: Mapping[str, FieldOutcome], parsed: Mapping[str, ParsedDocument],
-                 snapshot: InputSnapshot, policy: str) -> dict[str, FieldOutcome]:
+                 snapshot: InputSnapshot, policy: str,
+                 fallback_convention: str = "") -> dict[str, FieldOutcome]:
     """Re-verify every extracted value. An ungrounded value is not comparable."""
     grounded: dict[str, FieldOutcome] = {}
     reference_values = {
@@ -227,6 +232,7 @@ def _ground_side(fields: Mapping[str, FieldOutcome], parsed: Mapping[str, Parsed
             continue
         result = ground_candidate(
             outcome.value, document, policy=policy,
+            fallback_convention=fallback_convention,
             expected_hash=ref.content_hash if ref else None,
             reference_values=reference_values,
         )
@@ -239,6 +245,136 @@ def _ground_side(fields: Mapping[str, FieldOutcome], parsed: Mapping[str, Parsed
                 alternatives=outcome.alternatives,
             )
     return grounded
+
+
+# ---------------------------------------------------------------------------
+# Targeted AI extraction
+# ---------------------------------------------------------------------------
+
+# A location token the model may choose from, resolved back to a private block
+# server-side. The model never supplies offsets, indices or coordinates.
+def _location_tokens(document: ParsedDocument) -> dict[str, object]:
+    return {f"block:{block.block_id}": block for block in document.blocks}
+
+
+# The model may only help where the document already supports several readings
+# the rules refused to choose between. It cannot be asked to supply a value that
+# is absent, nor to relabel content: the alias policy remains the authority on
+# what a label means, and G2 enforces that regardless of what the model asserts.
+AI_ELIGIBLE_CAUSES = (
+    UncertaintyCause.COMPETING_CANDIDATES,
+    UncertaintyCause.SEMANTIC_UNCERTAIN,
+)
+
+
+def _eligible_for_ai(outcome: FieldOutcome) -> bool:
+    """Only interpretable ambiguity between candidates the document really has.
+
+    A missing value cannot be found by rereading, and a document-level problem
+    is not fixed by asking a model to look again. Both are left alone so the
+    honest uncertainty reaches a person instead of being papered over.
+    """
+    if outcome.resolved:
+        return False
+    return outcome.cause in AI_ELIGIBLE_CAUSES and len(outcome.alternatives) >= 2
+
+
+def ai_extract_side(document: Optional[ParsedDocument], side: str,
+                    fields: Mapping[str, FieldOutcome], *,
+                    services: IntelligenceServices,
+                    config: IntelligenceConfig,
+                    snapshot: InputSnapshot,
+                    fallback_convention: str = "") -> tuple[dict, int, int, list]:
+    """Ask the approved model about unresolved fields, then verify every answer.
+
+    Returns ``(fields, calls, assisted, events)``. A proposal only becomes a
+    value if it maps to a real private block and then passes G1, G2 and G3 —
+    the same gates deterministic extraction goes through. The model cannot set a
+    normalized value, a grounded flag, a comparison result or workflow state.
+    """
+    events: list[tuple[str, str]] = []
+    if document is None or document.status is not ParseStatus.OK:
+        return dict(fields), 0, 0, events
+
+    requested = [name for name, outcome in fields.items() if _eligible_for_ai(outcome)]
+    if not requested:
+        return dict(fields), 0, 0, events
+
+    allowed, reason = model_permitted_for(snapshot, config, services)
+    if not allowed:
+        return dict(fields), 0, 0, events
+
+    tokens = _location_tokens(document)
+    if services.budget is not None:
+        services.budget.spend()          # charged before the call, not after
+
+    try:
+        proposal = services.model.extract(
+            document_id=document.document_id,
+            document_text=document.text,
+            location_tokens=tuple(tokens),
+            requested_fields=tuple(requested),
+        )
+    except RetryableProcessingError:
+        # A provider failure leaves the deterministic result standing.
+        events.append(("AI_EXTRACTION_USED",
+                       f"Model extraction for the {side} was unavailable"))
+        return dict(fields), 1, 0, events
+
+    updated = dict(fields)
+    assisted = 0
+    for candidate_proposal in proposal.candidates:
+        block = tokens.get(candidate_proposal.locator_token)
+        if block is None:
+            continue
+        field = candidate_proposal.field
+        if field not in requested:
+            continue
+
+        outcome = fields.get(field)
+        if outcome is None:
+            continue
+        # The choice must be one of the readings the document already supports.
+        chosen = next(
+            (c for c in outcome.alternatives
+             if c.block_id == block.block_id and c.normalized is not None),
+            None,
+        )
+        if chosen is None:
+            events.append(("AI_EXTRACTION_USED",
+                           f"A model proposal for {field} on the {side} pointed outside "
+                           "the document's own candidates and was discarded"))
+            continue
+        normalized = chosen.normalized
+
+        candidate = Candidate(
+            field=field, side=side, document_id=document.document_id,
+            raw=block.value_text, label_text=block.label,
+            evidence=(Evidence(document.document_id, block.value_locator,
+                               block.value_text),),
+            derivation=(Derivation.TOTAL if candidate_proposal.derivation == "TOTAL"
+                        else Derivation.DIRECT),
+            method=ExtractionMethod.AI, normalized=normalized,
+            flags=("AI_PROPOSED",), block_id=block.block_id,
+        )
+        ref = snapshot.source_by_id(document.document_id)
+        result = ground_candidate(
+            candidate, document, policy=config.numeric_locale_policy,
+            fallback_convention=fallback_convention,
+            expected_hash=ref.content_hash if ref else None,
+        )
+        if not result.passed:
+            events.append(("AI_EXTRACTION_USED",
+                           f"A model proposal for {field} on the {side} failed "
+                           f"{result.gate} and was discarded"))
+            continue
+
+        updated[field] = FieldOutcome(field=field, side=side, value=candidate)
+        assisted += 1
+        events.append(("AI_EXTRACTION_USED",
+                       f"{field} on the {side} was resolved with model assistance"))
+
+    return updated, 1, assisted, events
 
 
 # ---------------------------------------------------------------------------
@@ -481,6 +617,7 @@ def analyze_case(snapshot: InputSnapshot, context: AnalysisContext,
     config = context.config
     policy = config.numeric_locale_policy
     events: list[tuple[str, str]] = []
+    diagnostics_pre: list[Diagnostic] = []
     ai_calls = 0
 
     registry = services.registries.get(snapshot.registry_kind)
@@ -488,13 +625,25 @@ def analyze_case(snapshot: InputSnapshot, context: AnalysisContext,
 
     # 1. Classification over the current message.
     view = build_view(snapshot.subject, snapshot.body)
+    model_allowed, model_block_reason = model_permitted_for(snapshot, config, services)
+    if not model_allowed and model_block_reason and services.model is not None:
+        diagnostics_pre.append(Diagnostic(
+            "MODEL_NOT_USED", model_block_reason,
+            {"registry": snapshot.registry_kind},
+        ))
+    # Charge the attempt budget before the call. Spending afterwards would let a
+    # provider that times out repeatedly escape the limit entirely.
+    model_for_classification = services.model if model_allowed else None
+    if model_for_classification is not None and services.budget is not None:
+        from .classification import classify_rules
+
+        if classify_rules(view).category is None:
+            services.budget.spend()
     outcome = classify(
         view,
         attachment_names=tuple(ref.filename for ref in snapshot.sources),
-        model=services.model if _model_enabled(config, services) else None,
+        model=model_for_classification,
     )
-    if outcome.ai_calls and services.budget is not None:
-        services.budget.spend()
     ai_calls += outcome.ai_calls
     classification = outcome.result
     events.append(("EMAIL_CLASSIFIED",
@@ -505,6 +654,7 @@ def analyze_case(snapshot: InputSnapshot, context: AnalysisContext,
 
     # 2. Parse every present source.
     parsed, diagnostics = parse_snapshot(snapshot, context, services)
+    diagnostics = diagnostics_pre + list(diagnostics)
     for document in parsed.values():
         events.append(("DOCUMENT_PARSED",
                        f"Parsed {document.filename} with {document.parser_name} "
@@ -542,8 +692,26 @@ def analyze_case(snapshot: InputSnapshot, context: AnalysisContext,
                              fallback_convention=fallback_convention)
     bl_fields = extract_side(parsed.get(roles.bl), "BL", policy=policy,
                              fallback_convention=fallback_convention)
-    si_fields = _ground_side(si_fields, parsed, snapshot, policy)
-    bl_fields = _ground_side(bl_fields, parsed, snapshot, policy)
+    si_fields = _ground_side(si_fields, parsed, snapshot, policy, fallback_convention)
+    bl_fields = _ground_side(bl_fields, parsed, snapshot, policy, fallback_convention)
+
+    # 5b. Targeted model extraction for what the rules could not resolve. Every
+    # proposal is re-verified through the same gates before it becomes a value.
+    ai_assisted = 0
+    for side, fields_map, document_id in (("SI", si_fields, roles.si),
+                                          ("BL", bl_fields, roles.bl)):
+        refreshed, calls, assisted, ai_events = ai_extract_side(
+            parsed.get(document_id), side, fields_map,
+            services=services, config=config, snapshot=snapshot,
+            fallback_convention=fallback_convention,
+        )
+        ai_calls += calls
+        ai_assisted += assisted
+        events.extend(ai_events)
+        if side == "SI":
+            si_fields = refreshed
+        else:
+            bl_fields = refreshed
 
     # 6. Compare and roll up.
     comparisons = compare_all(si_fields, bl_fields)
@@ -571,7 +739,7 @@ def analyze_case(snapshot: InputSnapshot, context: AnalysisContext,
         si_fields=si_fields,
         bl_fields=bl_fields,
         ai_calls=ai_calls,
-        ai_assisted_fields=0,
+        ai_assisted_fields=ai_assisted,
         processing_ms=int((time.monotonic() - started) * 1000),
         events=tuple(events),
         diagnostics=tuple(diagnostics),
@@ -580,9 +748,32 @@ def analyze_case(snapshot: InputSnapshot, context: AnalysisContext,
     )
 
 
-def _model_enabled(config: IntelligenceConfig, services: IntelligenceServices) -> bool:
+# Registry kinds whose content may be sent to an external provider only with
+# explicit, source-specific consent.
+CONSENT_REQUIRED_REGISTRIES = ("participant",)
+
+
+class ParticipantContentNotAuthorized(PermanentProcessingError):
+    """Sending this source's content to a provider is not authorized."""
+
+
+def model_permitted_for(snapshot: InputSnapshot, config: IntelligenceConfig,
+                        services: IntelligenceServices) -> tuple[bool, str]:
+    """Whether this run's content may be sent to the configured provider.
+
+    Two independent gates. ``INTELLIGENCE_AI_ENABLED`` says a provider exists;
+    ``INTELLIGENCE_AI_ALLOW_PARTICIPANT_CONTENT`` says this *source's* content
+    may leave the system. Read access to the corpus is not consent, so the
+    second gate is checked even when the first is on.
+    """
     if services.model is None:
-        return False
+        return False, "no model client is configured"
     if isinstance(services.model, ai_module.DisabledModelClient):
-        return False
-    return True
+        return False, "the model is disabled"
+    if snapshot.registry_kind in CONSENT_REQUIRED_REGISTRIES:
+        if not config.ai.allow_participant_content:
+            return False, (
+                f"sending {snapshot.registry_kind} content to a provider is not "
+                "authorized (INTELLIGENCE_AI_ALLOW_PARTICIPANT_CONTENT is off)"
+            )
+    return True, ""

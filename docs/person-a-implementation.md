@@ -2,11 +2,13 @@
 
 What was built, how it behaves, what it refuses to guess, and how to run it.
 
-- **Branch:** `claude/loving-bohr-x6whx9`, based on `main` at `72e6940`.
+- **Branch:** `claude/person-a-corrections`, continuing
+  `claude/loving-bohr-x6whx9` at `58f2a7e`, based on `main` at `72e6940`.
 - **Contract:** shared contract v2.1.1, retained **unchanged**. No new wire
   field, enum value, review action or endpoint was introduced.
-- **Baseline before this change:** 15 tests passed in 21.34 s.
-- **After this change:** 233 tests pass in 77.17 s.
+- **Baseline before any of this work:** 15 tests passed in 21.34 s.
+- **At `58f2a7e` (first pass):** 234 tests, 96 files changed.
+- **After the correction pass (R1-R10):** 301 tests pass in 109.77 s.
 
 ## 1. What the pipeline does
 
@@ -55,12 +57,17 @@ heading yields no value. The internal field name `gross_weight_kg` is not
 evidence that the source number is kilograms. `MT` and `tonnes` convert; a bare
 `ton` stays ambiguous.
 
-**A port code that contradicts its port.** The corpus contains
+**A port code that is not established as that port's.** The corpus contains
 `BALTIMORE, US (NGAPP)` — a Nigerian code on a US port. A parenthesised
-five-letter token is treated as a supplementary UN/LOCODE only when its
-country prefix matches a country named in the same value. A *consistent* code
-may differ in spelling (`NHAVA SHEVA, INDIA` equals `NHAVA SHEVA, INDIA
-(INNSA)`); an *inconsistent* one is a real difference and is reported as one.
+five-letter token is treated as supplementary only when
+`VERIFIED_PORT_CODES` establishes it as that port's code, from repeated source
+evidence (`scripts/derive_port_codes.py`, at least three observations and a
+strict majority). Country agreement alone is **not** proof:
+`PORT KLANG, MALAYSIA (MYZZZ)` has the right prefix but identifies no verified
+port, so the code carries meaning and the difference is preserved. A *verified*
+code may differ in spelling (`NHAVA SHEVA, INDIA` equals `NHAVA SHEVA, INDIA
+(INNSA)`); a *contradicted* or *unverified* one is a real difference. Ports with
+split or thin evidence (Cebu, Tuticorin) are deliberately absent from the table.
 Terminal qualifiers such as `(WESTPORT)` are never stripped.
 
 **A role from a filename.** `email_501_BL.txt` is a commercial invoice. Roles
@@ -68,16 +75,22 @@ come from document headings and body content; the filename only ranks
 candidates. When two documents tie for a role, that is a question, not a
 coin flip.
 
-**A value that only looks right.** Every value passes three gates before it can
-be compared, whether a rule, a model, a person or a candidate selection
-produced it:
+**A value that only looks right.** Every value is bound to the private parser
+block it was read from, and passes three gates before it can be compared —
+whether a rule, a model, a person or a candidate selection produced it:
 
-- **G1** the exact quote occurs at that exact location in *this run's* parsed
-  artifact, with a matching content hash.
-- **G2** the structural label supports that canonical field. A gross weight is
-  never supported by digits sitting in a seal number, a net weight or an
-  invoice amount.
-- **G3** the value is re-derived from the evidence and must match exactly.
+- **G1** the quote is the text stored at the *bound block's* value location in
+  this run's artifact, with a matching content hash. Verifying against the page
+  is not enough: every value on a PDF page shares `PdfPage(1)`, so a page-level
+  check would accept one field's number as another field's value.
+- **G2** the **bound block's own** label supports that canonical field. The
+  label is read from the artifact, never from the candidate, so claiming
+  `label_text="Gross Weight"` proves nothing. A gross weight is never supported
+  by digits sitting in a seal number, a net weight or an invoice amount.
+- **G3** the value is re-derived from the bound block's stored text — not from
+  the quote the caller supplied — and must match exactly.
+
+A candidate that names no block cannot be grounded at all.
 
 ## 3. Parser conventions (relied on by G1)
 
@@ -174,7 +187,14 @@ Outcomes for the 129 BL comparison cases, under the two policies:
 | Policy | OK | MISMATCH | NEEDS_REVIEW |
 |---|---:|---:|---:|
 | `auto` (default, conservative) | 1 | 2 | 126 |
-| `en` (',' groups, '.' decimal) | 52 | 38 | 39 |
+| `en` (',' groups, '.' decimal) | 52 | 39 | 38 |
+
+An earlier revision of this document reported the `en` row as 52/38/39. That was
+a transposition in the write-up: `58f2a7e` itself produced 52/39/38, which is
+what an independent review also measured. Both policies process all 520 records
+with zero technical failures, and neither changes the classification counts.
+Switching to `en` moves 88 cases: 51 from NEEDS_REVIEW to OK and 37 from
+NEEDS_REVIEW to MISMATCH.
 
 Under `auto`, 108 of the 126 reviews are `unreadable`, almost all from
 `LONE_SEPARATOR_AMBIGUOUS`. The corpus contains exactly **one** unambiguous
@@ -243,11 +263,18 @@ would not be reproducible.
   as unreadable.
 - **Semantic equivalence is off** and should stay off for scored evaluation.
 - **No live model call has been executed.** The adapter, prompts, validation,
-  budget and failure mapping are implemented and tested offline against an
-  injected client and a mock HTTP transport. `email_demo_needs_model` is a case
-  the rules genuinely cannot decide — removing the provider changes what the
-  system can do with it. A live smoke test needs credentials that do not exist
-  in this repository.
+  budget, consent gate and failure mapping are implemented and tested offline
+  against an injected client and a mock HTTP transport. Two cases genuinely
+  depend on the provider: `email_demo_needs_model` (no rule can classify it) and
+  `email_demo_ambiguous_weight` (two competing gross weights the rules refuse to
+  choose between). Removing the provider changes what the system can do with
+  both. A live smoke test needs credentials that do not exist in this repository.
+- **Targeted AI extraction is connected, and deliberately narrow.** The model is
+  asked only about fields where the document supports *several* readings the
+  rules would not choose between, and it may only point at one of those blocks.
+  It cannot supply a value for an absent field, relabel content, or introduce a
+  number: the alias policy remains the authority on what a label means, the
+  value is always recomputed from the block, and G1-G3 re-verify the result.
 - **Gross weight from a column of detail rows with no declared total** is not
   extracted; only labelled values and explicit totals are. Such a document
   reports `missing_value` rather than summing rows the source did not total.
@@ -255,3 +282,26 @@ would not be reproducible.
   applied; no pair-specific equivalence was added.
 - **Participant ingestion is not yet behind authentication** — see
   `docs/person-a-integration.md`.
+
+
+## 10. Correction pass (R1-R10)
+
+An engineering review of `58f2a7e` found ten defects. Each was reproduced first,
+given a regression test that fails on that commit, then fixed.
+
+| Finding | Change |
+|---|---|
+| R1 | Candidates carry the private block they were read from. G1 verifies the quote against that block, G2 reads the label from it, G3 re-derives from it. A page locator is no longer proof of a label/value pairing. |
+| R2 | One authoritative `load_working_state`, shared by validation and application, replaying exactly the decisions already applied. |
+| R3 | The case write and the applied marker share one transaction under the run guard; a zero-row update marks nothing. |
+| R4 | A supplied job id must match its decision exactly; no fallback to another pending record. |
+| R5 | `allow_participant_content` is enforced at the pipeline boundary, and no provider client is built for a non-consented source. |
+| R6 | `analyze_case` now calls the extraction adapter for genuinely ambiguous fields and reports real `ai_assisted_fields`. |
+| R7 | Each run records its input and config identity in `run_snapshots`; a decision against changed inputs or policy fails visibly. Resumption never consults a provider, and the call budget is charged before the call. |
+| R8 | Public document roles follow the operational selection. |
+| R9 | Reprocessed runs are created with real pinned identities rather than `v1`. |
+| R10 | Port codes are supplementary only under a versioned, source-derived table. |
+
+Also fixed: a registry-level numeric convention now reaches G3 as well as
+extraction. Previously it resolved the value during extraction and was then
+rejected by the gate, producing `UNGROUNDED` — worse than either policy alone.

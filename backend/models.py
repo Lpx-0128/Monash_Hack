@@ -73,3 +73,27 @@ class AcceptedDecisionModel(Base):
     __table_args__ = (
         Index("ix_accepted_decisions_run_seq", "run_id", "sequence"),
     )
+
+
+class RunSnapshotModel(Base):
+    """The immutable identity of one run's input and configuration.
+
+    A decision accepted during a run must be validated and applied against the
+    inputs that run actually saw. This records what those were, so a changed
+    source file, a changed policy or a different configuration is detected and
+    refused rather than silently changing untouched operational fields inside a
+    run whose machine assessment is already frozen.
+    """
+
+    __tablename__ = "run_snapshots"
+
+    run_id = Column(String, primary_key=True)
+    case_id = Column(String, ForeignKey("cases.case_id"), index=True, nullable=False)
+    input_version = Column(String, nullable=False)
+    config_version = Column(String, nullable=False)
+    # document_id -> content hash, for every source the run ingested.
+    source_manifest = Column(JSON, nullable=False, default=dict)
+    # The classification the automated pass settled on, so a resumption never
+    # re-asks a nondeterministic provider.
+    classification = Column(JSON, nullable=True)
+    created_at = Column(String, nullable=False)

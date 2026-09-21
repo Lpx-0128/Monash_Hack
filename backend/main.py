@@ -276,13 +276,26 @@ def reprocess_case(
             )
         )
 
+    # Pin the new run to the identities its inputs and configuration actually
+    # have. A placeholder here would survive into the persisted run and make the
+    # run unreproducible.
+    try:
+        fresh = crud.load_input_snapshot(schema_case.email.email_id, caller_scope)
+        input_version = fresh.input_version
+        demo_safe = (caller_scope == schemas.RunKind.DEMO and fresh.demo_safe)
+    except SourceDataIssue as exc:
+        raise HTTPException(
+            status_code=404,
+            detail={"code": schemas.ErrorCode.NOT_FOUND.value, "message": str(exc)},
+        )
+
     schema_case.run = schemas.Run(
         run_id=new_run_id,
         kind=caller_scope,
         started_at=now,
-        input_version="v1",
-        config_version="v1",
-        demo_safe=(caller_scope == schemas.RunKind.DEMO)
+        input_version=input_version,
+        config_version=crud.intelligence_config().config_identity(),
+        demo_safe=demo_safe,
     )
     schema_case.workflow_status = schemas.WorkflowStatus.PROCESSING
     schema_case.machine_assessment = None
@@ -446,13 +459,19 @@ def submit_decision(
 
     context = worker._build_context(schema_case)
     try:
-        state = _decision_state(schema_case)
+        state = _decision_state(schema_case, db)
         decision = validate_human_proposal(proposal, requirement, state, context)
     except ProposalRejected as exc:
         # A rejected proposal closes nothing, enqueues nothing and consumes no
         # accepted-decision budget. The review stays OPEN.
         raise HTTPException(status_code=422,
                             detail={"code": exc.code, "message": exc.message})
+    except worker.RunIdentityChanged as exc:
+        # The run can no longer be reasoned about; reprocessing is the remedy.
+        raise HTTPException(
+            status_code=409,
+            detail={"code": schemas.ErrorCode.STALE_RUN.value, "message": str(exc)},
+        )
     except SourceDataIssue as exc:
         raise HTTPException(
             status_code=422,
@@ -485,19 +504,19 @@ def submit_decision(
     return schema_case
 
 
-def _decision_state(schema_case: schemas.Case):
-    """Rebuild the working state a proposal is validated against."""
-    snapshot = crud.load_input_snapshot(schema_case.email.email_id, schema_case.run.kind)
-    context = worker._build_context(schema_case)
-    services = worker._build_services()
-    from .intelligence.pipeline import analyze_case
-    from .intelligence.recomputation import working_state_from_analysis
+def _decision_state(schema_case: schemas.Case, db: Session):
+    """The working state a proposal is validated against.
 
-    analysis = analyze_case(snapshot, context, services)
-    registry = crud.intelligence_registries().get(snapshot.registry_kind)
-    return working_state_from_analysis(
-        analysis, snapshot, registry.numeric_convention() if registry else ""
+    This is the same loader the worker applies decisions through, so validation
+    and application always see one state: the run's immutable automated analysis
+    plus exactly the decisions already durably applied to it. Validating against
+    a freshly rerun analysis instead would ignore an earlier accepted document
+    choice and reject a value the chosen document genuinely supports.
+    """
+    state, _context, _snapshot, _analysis, _applied = worker.load_working_state(
+        db, schema_case, schema_case.run.run_id
     )
+    return state
 
 
 @api_router.get("/documents/{document_id}/content")

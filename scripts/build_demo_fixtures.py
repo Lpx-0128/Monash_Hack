@@ -343,7 +343,19 @@ def build(root: Path) -> None:
     email("email_demo_office", "Please check SI vs draft BL - DEMO-BK-00051",
           compare_body, ["demo_office_SI.xlsx", "demo_office_BL.docx"])
 
-    # 13. An email whose intent no rule recognizes: the configured model's case.
+    # 13. Two competing gross weights the rules refuse to choose between. The
+    # model can pick one, citing the document; every gate still applies.
+    (attachments / "demo_ambiguous_SI.txt").write_text(SI_HEADING + BASE_SI, encoding="utf-8")
+    (attachments / "demo_ambiguous_BL.txt").write_text(
+        BL_HEADING + BASE_BL.replace(
+            "Gross Wt (kgs): 18500 KG",
+            "Gross Wt (kgs): 18500 KG\nGross Weight (KG): 18950 KG",
+        ),
+        encoding="utf-8")
+    email("email_demo_ambiguous_weight", "Please check SI vs draft BL - DEMO-BK-00053",
+          compare_body, ["demo_ambiguous_SI.txt", "demo_ambiguous_BL.txt"])
+
+    # 14. An email whose intent no rule recognizes: the configured model's case.
     email("email_demo_needs_model", "DEMO-BK-00052 follow up",
           "Dear Team,\n\nRegarding DEMO-BK-00052 - the paperwork you sent through "
           "yesterday against what the customer originally asked for. Something is "
