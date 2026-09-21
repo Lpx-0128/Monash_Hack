@@ -152,7 +152,7 @@ def list_cases(
     has_open_review: Optional[bool] = None,
     run_kind: Optional[schemas.RunKind] = None,
     skip: int = 0,
-    limit: int = 1000,
+    limit: int = 10_000,
     x_run_kind: Optional[str] = Header(None, alias="X-Run-Kind"),
     db: Session = Depends(get_db)
 ):
@@ -680,7 +680,7 @@ def get_stats(
         if effective:
             by_effective_status[effective] = by_effective_status.get(effective, 0) + 1
 
-        if case.email.category == schemas.EmailCategory.BL_COMPARISON:
+        if case.email.category == schemas.EmailCategory.BL_COMPARISON and effective in ("OK", "MISMATCH", "NEEDS_REVIEW"):
             bl_total += 1
             if effective == "OK":
                 bl_ok += 1
@@ -692,7 +692,8 @@ def get_stats(
         # Auto-completed: COMPLETED runs with zero reviews created throughout the run
         if case.workflow_status == schemas.WorkflowStatus.COMPLETED:
             had_review = any(
-                ev.type == schemas.HistoryEventType.REVIEW_CREATED.value and ev.run_id == case.run.run_id
+                (ev.type == schemas.HistoryEventType.REVIEW_CREATED or ev.type == "REVIEW_CREATED" or getattr(ev.type, "value", None) == "REVIEW_CREATED")
+                and ev.run_id == case.run.run_id
                 for ev in case.history
             )
             if not had_review:
