@@ -150,15 +150,38 @@ export function ReviewActions({
         confirmed: true,
       } satisfies OverrideConfirmation;
     try {
-      const result = await api.decide(d);
+      const accepted = await api.decide(d);
       if (!alive.current) return;
       sessionStorage.removeItem(`draft:${key}`);
       setProposal(undefined);
       setOverride(false);
+      onCase(accepted);
+
+      // Actively poll until the worker applies the decision (usually 200-500ms)
+      let currentCase = accepted;
+      for (let attempt = 0; attempt < 20; attempt++) {
+        await new Promise((resolve) => setTimeout(resolve, 300));
+        if (!alive.current) return;
+        try {
+          const fresh = await api.detail(c.case_id);
+          if (!alive.current) return;
+          currentCase = fresh;
+          onCase(fresh);
+          if (fresh.workflow_status !== "PROCESSING") {
+            break;
+          }
+        } catch {
+          // ignore transient poll error while worker finishes
+        }
+      }
+
       setNotice(
-        "202 Accepted — processing continues. This is not verification completion.",
+        currentCase.workflow_status === "COMPLETED"
+          ? "Accepted decision applied. Case is now completed with updated operational results."
+          : currentCase.workflow_status === "BLOCKED_EXTERNAL"
+            ? "Acknowledgment recorded. Case marked as externally blocked awaiting corrected document."
+            : "202 Accepted — processing continues.",
       );
-      onCase(result);
     } catch (e) {
       if (!alive.current) return;
       if (

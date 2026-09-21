@@ -6,7 +6,7 @@ not run a second, parallel version of them.
 
 import uuid
 
-from tests.conftest import DEMO_INVOICE, DEMO_MATCH, DEMO_MISSING_WEIGHT
+from tests.conftest import DEMO_INVOICE, DEMO_MATCH, DEMO_MISMATCH, DEMO_MISSING_WEIGHT
 from tests.helpers import create_and_wait, poll_case
 
 
@@ -137,3 +137,30 @@ def test_stats_tolerate_a_bl_case_that_is_still_in_progress(client):
     stats = client.get("/api/v1/stats").json()
     assert stats["total_cases"] >= 1
     assert stats["by_machine_status"]["OK"] >= 0
+
+
+def test_case_field_manual_override(client):
+    """An operator directly overrides a field value on a case."""
+    create_and_wait(client, DEMO_MISMATCH, "COMPLETED")
+
+    # Override consignee on BL to match SI (MERIDIAN TRADING GMBH)
+    override_payload = {
+        "field": "consignee",
+        "side": "BL",
+        "value": "MERIDIAN TRADING GMBH\nHAFENSTRASSE 44; 20457 HAMBURG, GERMANY",
+        "user_message": "Operator verified correct consignee amendment.",
+        "actor_id": "operator_manual_test",
+    }
+    resp = client.post(f"/api/v1/cases/{DEMO_MISMATCH}/override", json=override_payload)
+    assert resp.status_code == 202
+
+    # Poll for completion after decision applied
+    updated = poll_case(client, DEMO_MISMATCH, "COMPLETED", timeout=10)
+    cg = next(f for f in updated["fields"] if f["field"] == "consignee")
+    assert "meridian trading gmbh" in cg["bl"]["normalized"]
+    assert cg["bl"]["resolved_by"] == "HUMAN"
+    assert cg["bl"]["value_origin"] == "MANUAL_OVERRIDE"
+    assert cg["result"] == "MATCH"
+    assert updated["resolution"]["actor_id"] == "operator_manual_test"
+
+

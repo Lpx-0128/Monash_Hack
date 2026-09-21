@@ -202,6 +202,13 @@ export type DecisionRequest =
       override_confirmation?: OverrideConfirmation;
     })
   | (DecisionBase & { action: "ACKNOWLEDGE" });
+export interface FieldOverrideRequest {
+  field: CanonicalField;
+  side: Side;
+  value: string | number;
+  user_message?: string;
+  actor_id?: string;
+}
 export type ErrorCode =
   | "REVIEW_ALREADY_CLOSED" | "STALE_RUN" | "ACTION_NOT_ALLOWED" | "INVALID_VALUE"
   | "VALUE_NOT_FOUND_IN_DOCUMENT" | "OVERRIDE_CONFIRMATION_REQUIRED"

@@ -5,6 +5,7 @@ import type {
   ReviewListItem,
   Stats,
   DecisionRequest,
+  FieldOverrideRequest,
   GmailStatus,
   GmailSyncRequest,
   GmailSyncResponse,
@@ -43,6 +44,7 @@ export interface CaseApi {
   create(emailId: string): Promise<Case>;
   reprocess(id: string): Promise<Case>;
   decide(decision: DecisionRequest): Promise<Case>;
+  overrideField(caseId: string, req: FieldOverrideRequest, signal?: AbortSignal): Promise<Case>;
   documentUrl(id: string): string;
   exportReportUrl(format: "json" | "csv", onlyMismatches?: boolean): string;
   exportCaseUrl(caseId: string, format: "json" | "csv"): string;
@@ -124,6 +126,13 @@ function httpApi(base: string): CaseApi {
         `${base}/reviews/${encodeURIComponent(decision.review_id)}/decision`,
         caseSchema,
         { method: "POST", body: JSON.stringify(decision) },
+        202,
+      ),
+    overrideField: (caseId, overrideReq, signal) =>
+      request(
+        `${base}/cases/${encodeURIComponent(caseId)}/override`,
+        caseSchema,
+        { method: "POST", body: JSON.stringify(overrideReq), signal },
         202,
       ),
     documentUrl: (id) => `${base}/documents/${encodeURIComponent(id)}/content`,

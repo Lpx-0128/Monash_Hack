@@ -430,6 +430,14 @@ class DecisionRequest(BaseModel):
     override_confirmation: Optional[OverrideConfirmation] = None
 
 
+class FieldOverrideRequest(BaseModel):
+    field: CanonicalField
+    side: Side
+    value: Any
+    user_message: Optional[str] = None
+    actor_id: str = "human_operator"
+
+
 class NotifiedRequest(BaseModel):
     run_id: str
 

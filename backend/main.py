@@ -22,9 +22,17 @@ from .intelligence.recomputation import (
     DecisionProposal,
     OverrideConfirmation,
     ProposalRejected,
+    ValidatedDecision,
+    parse_user_value,
     validate_human_proposal,
 )
-from .intelligence.types import SourceDataIssue
+from .intelligence.types import (
+    Candidate,
+    Derivation,
+    ExtractionMethod,
+    SourceDataIssue,
+)
+from .intelligence.pipeline import ReviewRequirement
 from .database import engine, get_db, SessionLocal, init_db
 from .worker_loop import start_worker_thread, stop_worker_thread
 
@@ -529,6 +537,110 @@ def submit_decision(
     )
 
     # Acceptance is durable but not applied: PROCESSING, previous resolution kept.
+    schema_case.workflow_status = schemas.WorkflowStatus.PROCESSING
+    schema_case.updated_at = now
+    crud.update_case_with_decision(db, c, schema_case, decision, requirement, now)
+    return schema_case
+
+
+@api_router.post("/cases/{case_id}/override", status_code=status.HTTP_202_ACCEPTED)
+def override_case_field(
+    case_id: str,
+    req: schemas.FieldOverrideRequest,
+    x_run_kind: Optional[str] = Header(None, alias="X-Run-Kind"),
+    db: Session = Depends(get_db)
+):
+    """Allow an operator to directly override any field on a case."""
+    caller_scope = _get_caller_scope(x_run_kind)
+    c = crud.get_case(db, case_id)
+    if not c:
+        raise HTTPException(status_code=404, detail=schemas.ErrorCode.NOT_FOUND.value)
+
+    schema_case = crud.map_db_to_schema(c)
+    if schema_case.run.kind == schemas.RunKind.EVAL and caller_scope != schemas.RunKind.EVAL:
+        raise HTTPException(status_code=404, detail=schemas.ErrorCode.NOT_FOUND.value)
+
+    try:
+        proposed = parse_user_value(req.field.value, req.value)
+    except Exception as exc:
+        raise HTTPException(
+            status_code=422,
+            detail={"code": schemas.ErrorCode.INVALID_VALUE.value, "message": str(exc)},
+        )
+
+    field = req.field.value
+    side = req.side.value
+    doc_id = next((d.document_id for d in schema_case.documents if d.role == side), "")
+
+    override = Candidate(
+        field=field,
+        side=side,
+        document_id=doc_id,
+        raw=str(req.value),
+        label_text=None,
+        evidence=(),
+        derivation=Derivation.HUMAN_INPUT,
+        method=ExtractionMethod.HUMAN,
+        normalized=proposed,
+        flags=("MANUAL_OVERRIDE",),
+    )
+
+    now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    review_id = schema_case.review.review_id if schema_case.review else f"rev_ovr_{uuid.uuid4().hex[:8]}"
+    decision_id = f"dec_{uuid.uuid4().hex[:8]}"
+
+    decision = ValidatedDecision(
+        decision_id=decision_id,
+        review_id=review_id,
+        run_id=schema_case.run.run_id,
+        action="PROVIDE_VALUE",
+        actor_id=req.actor_id,
+        channel="DASHBOARD",
+        user_message=req.user_message or f"Manual override for {field} ({side})",
+        input_version=schema_case.run.input_version or "demo-input",
+        config_version=schema_case.run.config_version or "config-1.0.0",
+        target_field=field,
+        target_side=side,
+        canonical=override,
+        value_origin="MANUAL_OVERRIDE",
+        grounded=False,
+    )
+
+    requirement = ReviewRequirement(
+        scope="FIELD",
+        ui_mode="VALUE_INPUT",
+        reason="manual_override",
+        field=field,
+        side=side,
+        target_role=None,
+        question=f"Override {field} on {side}",
+        context_summary=f"Manual override entered by {req.actor_id}",
+        allowed_actions=("PROVIDE_VALUE",),
+    )
+
+    if schema_case.review:
+        schema_case.review.status = schemas.ReviewStatus.CLOSED
+        schema_case.review.closed_at = now
+        schema_case.review.close_reason = "DECISION_ACCEPTED"
+
+    schema_case.history.append(
+        schemas.HistoryEvent(
+            event_id=f"evt_{uuid.uuid4().hex[:8]}",
+            run_id=schema_case.run.run_id,
+            at=now,
+            type=schemas.HistoryEventType.DECISION_RECEIVED.value,
+            actor=schemas.Actor(kind="HUMAN", id=req.actor_id),
+            summary=f"Manual override for {field} ({side}) accepted",
+            details={
+                "decision_id": decision.decision_id,
+                "action": "PROVIDE_VALUE",
+                "field": field,
+                "side": side,
+                "value": req.value,
+            },
+        )
+    )
+
     schema_case.workflow_status = schemas.WorkflowStatus.PROCESSING
     schema_case.updated_at = now
     crud.update_case_with_decision(db, c, schema_case, decision, requirement, now)

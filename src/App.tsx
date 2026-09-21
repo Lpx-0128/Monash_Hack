@@ -2479,7 +2479,7 @@ function Detail({
                     <span>Draft bill of lading · BL</span>
                     <span>Comparison</span>
                   </div>
-                  <ComparisonFields c={c} />
+                  <ComparisonFields c={c} onCase={replace} />
                 </div>
               ) : (
                 <Empty
@@ -2596,7 +2596,50 @@ function Detail({
     </>
   );
 }
-function ComparisonFields({ c }: { c: Case }) {
+function ComparisonFields({ c, onCase }: { c: Case; onCase?: (c: Case) => void }) {
+  const [editingField, setEditingField] = useState<string | null>(null);
+  const [editSide, setEditSide] = useState<"SI" | "BL">("BL");
+  const [editVal, setEditVal] = useState("");
+  const [overrideMsg, setOverrideMsg] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [actionError, setActionError] = useState("");
+
+  async function applyOverride(field: string) {
+    if (!editVal.trim()) return;
+    setBusy(true);
+    setActionError("");
+    try {
+      const accepted = await api.overrideField(c.case_id, {
+        field: field as any,
+        side: editSide,
+        value: field === "gross_weight_kg" || field === "container_count" ? Number(editVal) || editVal : editVal,
+        user_message: overrideMsg || `Human operator manual override for ${field} on ${editSide}`,
+      });
+      onCase?.(accepted);
+
+      // Actively poll until worker applies decision
+      let currentCase = accepted;
+      for (let i = 0; i < 20; i++) {
+        await new Promise((r) => setTimeout(r, 300));
+        try {
+          const fresh = await api.detail(c.case_id);
+          currentCase = fresh;
+          onCase?.(fresh);
+          if (fresh.workflow_status !== "PROCESSING") break;
+        } catch {
+          // ignore transient poll error
+        }
+      }
+      setEditingField(null);
+      setEditVal("");
+      setOverrideMsg("");
+    } catch (err) {
+      setActionError((err as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
   // Keep human-applied values visible so the coordinator can verify the outcome.
   const needsAttention = (f: Case["fields"][number]) =>
     f.result !== "MATCH" ||
@@ -2634,7 +2677,67 @@ function ComparisonFields({ c }: { c: Case }) {
             {f.explanation}
           </p>
         )}
+        {onCase && (
+          <div style={{ marginTop: "6px" }}>
+            <button
+              type="button"
+              className="button quiet"
+              style={{ fontSize: "12px", padding: "3px 8px" }}
+              onClick={() => {
+                if (editingField === f.field) {
+                  setEditingField(null);
+                } else {
+                  setEditingField(f.field);
+                  setEditSide("BL");
+                  setEditVal(String(f.bl?.raw ?? f.si?.raw ?? ""));
+                  setActionError("");
+                }
+              }}
+            >
+              {editingField === f.field ? "Cancel edit" : "Manual override"}
+            </button>
+          </div>
+        )}
       </div>
+      {editingField === f.field && (
+        <div style={{ gridColumn: "1 / -1", padding: "12px", background: "rgba(0,0,0,0.03)", borderRadius: "6px", border: "1px solid var(--border)", margin: "8px 0" }}>
+          <div style={{ display: "flex", gap: "10px", alignItems: "center", flexWrap: "wrap", marginBottom: "8px" }}>
+            <strong style={{ fontSize: "13px" }}>Human Override for {fieldTitles[f.field]}</strong>
+            <label style={{ display: "inline-flex", alignItems: "center", gap: "4px", fontSize: "13px" }}>
+              Target Document:
+              <select value={editSide} onChange={(e) => setEditSide(e.target.value as "SI" | "BL")} disabled={busy}>
+                <option value="BL">Draft BL</option>
+                <option value="SI">Shipping Instruction (SI)</option>
+              </select>
+            </label>
+            <input
+              type="text"
+              placeholder={`Enter override value for ${fieldTitles[f.field]}`}
+              value={editVal}
+              onChange={(e) => setEditVal(e.target.value)}
+              disabled={busy}
+              style={{ flex: "1 1 200px", padding: "4px 8px" }}
+            />
+            <button
+              type="button"
+              className="button primary"
+              disabled={busy || !editVal.trim()}
+              onClick={() => void applyOverride(f.field)}
+            >
+              {busy ? "Applying…" : "Confirm Override"}
+            </button>
+            <button
+              type="button"
+              className="button quiet"
+              disabled={busy}
+              onClick={() => { setEditingField(null); setActionError(""); }}
+            >
+              Cancel
+            </button>
+          </div>
+          {actionError && <p style={{ color: "var(--red, #c00)", fontSize: "12px", margin: 0 }}>{actionError}</p>}
+        </div>
+      )}
     </article>
   );
   return (
