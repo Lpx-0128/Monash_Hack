@@ -766,12 +766,22 @@ def get_stats(
     bl_ok = 0
     bl_mismatch = 0
     bl_needs_review = 0
+    total_fields_count = 0
+    grounded_fields_count = 0
 
     for c in cases:
         case = crud.map_db_to_schema(c)
         if case.run.kind != effective_run_kind:
             continue
         total_filtered += 1
+
+        if case.fields:
+            for f in case.fields:
+                for side_val in (f.si, f.bl):
+                    if side_val and (side_val.raw is not None or side_val.normalized is not None):
+                        total_fields_count += 1
+                        if side_val.grounded:
+                            grounded_fields_count += 1
 
         cat = case.email.category.value if case.email.category else None
         if cat:
@@ -830,6 +840,12 @@ def get_stats(
     if processing_ms_list:
         avg_processing = sum(processing_ms_list) / len(processing_ms_list)
 
+    grounding_acc = (
+        round((grounded_fields_count / total_fields_count) * 100, 1)
+        if total_fields_count > 0
+        else 100.0
+    )
+
     return schemas.Stats(
         generated_at=now,
         run_kind=effective_run_kind,
@@ -846,7 +862,8 @@ def get_stats(
         auto_completed=auto_completed,
         ai_assisted_cases=ai_assisted_cases,
         ai_calls_total=ai_calls_total,
-        avg_processing_ms=avg_processing
+        avg_processing_ms=avg_processing,
+        grounding_accuracy=grounding_acc,
     )
 
 

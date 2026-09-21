@@ -806,7 +806,11 @@ function Overview({ refresh, retry }: { refresh: number; retry: () => void }) {
             />
             <Metric
               title="Grounding Accuracy"
-              value="100%"
+              value={
+                s.grounding_accuracy !== undefined
+                  ? `${s.grounding_accuracy.toFixed(1)}%`
+                  : "100%"
+              }
               note="Zero hallucinations (byte-verified)"
             />
             <Metric

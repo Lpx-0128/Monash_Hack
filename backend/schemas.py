@@ -464,6 +464,7 @@ class Stats(BaseModel):
     ai_assisted_cases: int = 0
     ai_calls_total: int = 0
     avg_processing_ms: Optional[float] = None
+    grounding_accuracy: Optional[float] = 100.0
 
 
 class GmailSyncRequest(BaseModel):

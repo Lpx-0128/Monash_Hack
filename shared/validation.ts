@@ -518,6 +518,7 @@ export const statsSchema: z.ZodType<Stats> = obj({
   ai_assisted_cases: count,
   ai_calls_total: count,
   avg_processing_ms: z.number().nonnegative().nullable(),
+  grounding_accuracy: z.number().min(0).max(100).optional(),
 }).superRefine((s, c) => {
   if (
     Object.values(s.by_workflow).reduce((a, b) => a + b, 0) !== s.total_cases ||

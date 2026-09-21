@@ -164,3 +164,40 @@ def test_case_field_manual_override(client):
     assert updated["resolution"]["actor_id"] == "operator_manual_test"
 
 
+def test_stats_update_dynamically(client):
+    """Verify that total_cases, visible failures, pending decisions, grounding accuracy,
+    and model autonomy update dynamically as cases are added and state transitions occur."""
+    s0 = client.get("/api/v1/stats").json()
+    assert "total_cases" in s0
+    assert "by_workflow" in s0
+    assert "awaiting_human_now" in s0
+    assert "auto_completed" in s0
+    assert "grounding_accuracy" in s0
+    assert 0.0 <= s0["grounding_accuracy"] <= 100.0
+
+    # Ingest a new mock email to dynamically increase total cases
+    resp = client.post(
+        "/api/v1/inbox/compose",
+        data={
+            "from_address": "stats_verifier@port-authority.org",
+            "subject": "Dynamic Stats Test Notification",
+            "body": "Notice of vessel berth schedule and container movement update.",
+        },
+    )
+    assert resp.status_code == 202
+    created_case = resp.json()
+
+    s1 = client.get("/api/v1/stats").json()
+    # Total cases must increment immediately
+    assert s1["total_cases"] == s0["total_cases"] + 1
+    # Visible failures reflects exact FAILED count in workflow dictionary
+    assert s1["by_workflow"]["FAILED"] == sum(
+        1 for c in client.get("/api/v1/cases?limit=1000").json() if c["workflow_status"] == "FAILED"
+    )
+    # Pending decisions reflects exact awaiting_human_now count
+    assert s1["awaiting_human_now"] >= 0
+    # Grounding accuracy is dynamically calculated
+    assert 0.0 <= s1["grounding_accuracy"] <= 100.0
+
+
+

@@ -60,10 +60,23 @@ export function statistics(
     ai_assisted_cases: 0,
     ai_calls_total: 0,
     avg_processing_ms: null,
+    grounding_accuracy: 100,
   };
   const durations: number[] = [];
+  let totalFields = 0;
+  let groundedFields = 0;
   for (const c of cases) {
     assertDemo(c);
+    if (c.fields) {
+      for (const f of c.fields) {
+        for (const side of [f.si, f.bl]) {
+          if (side && (side.raw !== null || side.normalized !== null)) {
+            totalFields++;
+            if (side.grounded) groundedFields++;
+          }
+        }
+      }
+    }
     s.by_workflow[c.workflow_status]++;
     if (c.email.category) s.by_category[c.email.category]++;
     else s.unclassified++;
@@ -102,6 +115,10 @@ export function statistics(
   s.avg_processing_ms = durations.length
     ? durations.reduce((a, b) => a + b, 0) / durations.length
     : null;
+  s.grounding_accuracy =
+    totalFields > 0
+      ? Math.round((groundedFields / totalFields) * 1000) / 10
+      : 100;
   return statsSchema.parse(s);
 }
 export class DemoStore {
@@ -234,6 +251,7 @@ export class DemoStore {
     this.cases = new Map(
       data.cases.map(([id, c]) => {
         // Current synthetic DEMO state only. Frozen EVAL exports are never loaded here.
+        assertDemo(c);
         const old = c as unknown as { schema_version: string };
         if (
           old.schema_version === "2.1.1" &&

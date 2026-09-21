@@ -232,6 +232,7 @@ export interface Stats {
   ai_assisted_cases: number;
   ai_calls_total: number;
   avg_processing_ms: number | null;
+  grounding_accuracy?: number;
 }
 
 export interface GmailStatus {
