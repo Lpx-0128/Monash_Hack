@@ -866,6 +866,35 @@ def get_gmail_status():
     )
 
 
+@api_router.post("/inbox/gmail/clear", response_model=schemas.GmailClearResponse)
+def clear_gmail_cases(db: Session = Depends(get_db)):
+    """Clear all dynamically synced Gmail and mock composer cases."""
+    count = crud.clear_inbox_cases(db)
+    try:
+        inbox_dir = Path("resources/demo-fixtures/inbox")
+        if inbox_dir.exists():
+            for p in inbox_dir.glob("email_gmail_*.json"):
+                try:
+                    p.unlink()
+                except Exception:
+                    pass
+        att_dir = Path("resources/demo-fixtures/attachments")
+        if att_dir.exists():
+            for p in att_dir.glob("email_gmail_*"):
+                try:
+                    p.unlink()
+                except Exception:
+                    pass
+    except Exception:
+        pass
+
+    return schemas.GmailClearResponse(
+        status="OK",
+        deleted_count=count,
+        message=f"Successfully cleared {count} synced case(s).",
+    )
+
+
 # Mount the versioned router
 app.include_router(api_router)
 

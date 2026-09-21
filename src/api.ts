@@ -8,6 +8,7 @@ import type {
   GmailStatus,
   GmailSyncRequest,
   GmailSyncResponse,
+  GmailClearResponse,
 } from "../shared/types";
 import {
   caseSchema,
@@ -17,6 +18,7 @@ import {
   summarySchema,
   gmailStatusSchema,
   gmailSyncResponseSchema,
+  gmailClearResponseSchema,
 } from "../shared/validation";
 export type Filters = {
   workflow_status?: string;
@@ -44,6 +46,7 @@ export interface CaseApi {
   documentUrl(id: string): string;
   gmailStatus(signal?: AbortSignal): Promise<GmailStatus>;
   gmailSync(req?: GmailSyncRequest, signal?: AbortSignal): Promise<GmailSyncResponse>;
+  gmailClear(signal?: AbortSignal): Promise<GmailClearResponse>;
   composeMockEmail(formData: FormData, signal?: AbortSignal): Promise<Case>;
 }
 export async function request<T>(
@@ -127,6 +130,11 @@ function httpApi(base: string): CaseApi {
       request(`${base}/inbox/gmail/sync`, gmailSyncResponseSchema, {
         method: "POST",
         body: JSON.stringify(req),
+        signal,
+      }),
+    gmailClear: (signal) =>
+      request(`${base}/inbox/gmail/clear`, gmailClearResponseSchema, {
+        method: "POST",
         signal,
       }),
     composeMockEmail: async (formData, signal) => {

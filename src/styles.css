@@ -77,6 +77,17 @@ button.primary:hover,
 .button.primary:hover {
   background: #0d513e;
 }
+button.danger,
+.button.danger {
+  background: #fff;
+  color: var(--red);
+  border-color: #f1b0b7;
+}
+button.danger:hover,
+.button.danger:hover {
+  background: var(--soft-red);
+  border-color: var(--red);
+}
 .quiet {
   background: transparent;
 }

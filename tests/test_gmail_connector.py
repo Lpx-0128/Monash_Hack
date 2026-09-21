@@ -117,3 +117,13 @@ def test_gmail_api_sync_unconfigured():
         resp = client.post("/api/v1/inbox/gmail/sync", json={})
         assert resp.status_code == 400
         assert resp.json()["error"]["code"] == "INVALID_VALUE"
+
+
+def test_gmail_api_clear_endpoint():
+    client = TestClient(app)
+    resp = client.post("/api/v1/inbox/gmail/clear")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["status"] == "OK"
+    assert "deleted_count" in data
+

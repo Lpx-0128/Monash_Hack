@@ -1064,11 +1064,14 @@ function GmailInboxView({
   const [syncing, setSyncing] = useState(false);
   const [syncResult, setSyncResult] = useState<GmailSyncResponse | null>(null);
   const [syncError, setSyncError] = useState<string | null>(null);
+  const [clearing, setClearing] = useState(false);
+  const [clearNotice, setClearNotice] = useState<string | null>(null);
 
   async function handleSync(e: React.FormEvent) {
     e.preventDefault();
     setSyncing(true);
     setSyncError(null);
+    setClearNotice(null);
     try {
       const payload: GmailSyncRequest = { limit };
       if (username.trim()) payload.username = username.trim();
@@ -1080,6 +1083,25 @@ function GmailInboxView({
       setSyncError((err as Error).message);
     } finally {
       setSyncing(false);
+    }
+  }
+
+  async function handleClear() {
+    if (!window.confirm("Are you sure you want to clear all synced Gmail cases from the database? Benchmark cases will remain untouched.")) {
+      return;
+    }
+    setClearing(true);
+    setClearNotice(null);
+    setSyncError(null);
+    try {
+      const res = await api.gmailClear();
+      setSyncResult(null);
+      setClearNotice(`Successfully deleted ${res.deleted_count} synced case(s).`);
+      retry();
+    } catch (err) {
+      setSyncError((err as Error).message);
+    } finally {
+      setClearing(false);
     }
   }
 
@@ -1213,29 +1235,52 @@ function GmailInboxView({
                   </div>
                 </div>
 
+                {clearNotice && (
+                  <div className="notice" style={{ marginBottom: "16px", borderColor: "#16a34a" }}>
+                    <Check size={18} aria-hidden="true" style={{ color: "#16a34a" }} />
+                    <div>
+                      <strong style={{ color: "#16a34a" }}>Cases Cleared</strong>
+                      <p style={{ margin: "2px 0 0", fontSize: "12px" }}>{clearNotice}</p>
+                    </div>
+                  </div>
+                )}
+
                 {syncError && (
                   <div className="notice warning" style={{ marginBottom: "16px" }}>
                     <TriangleAlert size={18} aria-hidden="true" />
                     <div>
-                      <strong>Sync Failed</strong>
+                      <strong>Action Failed</strong>
                       <p style={{ margin: "2px 0 0", fontSize: "12px" }}>{syncError}</p>
                     </div>
                   </div>
                 )}
 
-                <button
-                  type="submit"
-                  className="button primary"
-                  disabled={syncing}
-                  style={{ display: "inline-flex", alignItems: "center", gap: "8px" }}
-                >
-                  <RefreshCw
-                    size={16}
-                    className={syncing ? "spin" : ""}
-                    aria-hidden="true"
-                  />
-                  {syncing ? "Synchronizing with Gmail..." : "Sync Unread Emails Now"}
-                </button>
+                <div style={{ display: "flex", gap: "10px", alignItems: "center", flexWrap: "wrap" }}>
+                  <button
+                    type="submit"
+                    className="button primary"
+                    disabled={syncing || clearing}
+                    style={{ display: "inline-flex", alignItems: "center", gap: "8px" }}
+                  >
+                    <RefreshCw
+                      size={16}
+                      className={syncing ? "spin" : ""}
+                      aria-hidden="true"
+                    />
+                    {syncing ? "Synchronizing with Gmail..." : "Sync Unread Emails Now"}
+                  </button>
+
+                  <button
+                    type="button"
+                    className="button danger"
+                    disabled={syncing || clearing}
+                    onClick={handleClear}
+                    style={{ display: "inline-flex", alignItems: "center", gap: "8px" }}
+                  >
+                    <Trash2 size={16} aria-hidden="true" />
+                    {clearing ? "Clearing Cases..." : "Clear Synced Cases"}
+                  </button>
+                </div>
               </form>
             </Panel>
 

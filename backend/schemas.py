@@ -473,3 +473,10 @@ class GmailStatusResponse(BaseModel):
     folder: Optional[str] = None
     unseen_count: Optional[int] = None
     error: Optional[str] = None
+
+
+class GmailClearResponse(BaseModel):
+    status: str = "OK"
+    deleted_count: int
+    message: Optional[str] = None
+

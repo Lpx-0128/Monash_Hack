@@ -588,3 +588,10 @@ export const gmailSyncResponseSchema = obj({
   error: z.string().nullable().optional(),
 });
 
+export const gmailClearResponseSchema = z.object({
+  status: z.string(),
+  deleted_count: z.number().int().nonnegative(),
+  message: z.string().nullable().optional(),
+}).passthrough();
+
+

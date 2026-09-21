@@ -545,3 +545,21 @@ def update_job_status(db: Session, job_id: str, status: str, error: str = None):
         db.commit()
         db.refresh(job)
     return job
+
+
+def clear_inbox_cases(db: Session) -> int:
+    """Delete all dynamically synced Gmail and mock composer cases and associated jobs."""
+    cases_to_delete = (
+        db.query(models.CaseModel)
+        .filter(
+            (models.CaseModel.case_id.like("case_email_gmail_%"))
+            | (models.CaseModel.case_id.like("case_email_custom_%"))
+        )
+        .all()
+    )
+    count = len(cases_to_delete)
+    for c in cases_to_delete:
+        db.delete(c)
+    db.commit()
+    return count
+

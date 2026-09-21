@@ -244,3 +244,10 @@ export interface GmailSyncResponse {
   error?: string | null;
 }
 
+export interface GmailClearResponse {
+  status: "OK" | "ERROR" | string;
+  deleted_count: number;
+  message?: string | null;
+}
+
+
