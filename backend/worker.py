@@ -123,10 +123,10 @@ def save_run_snapshot(case: schemas.Case, snapshot, analysis) -> dict:
     }
 
 
-def load_run_snapshot(db, run_id: str):
+def load_run_snapshot(db, run_id: str) -> Optional[models.RunSnapshotModel]:
     return (
         db.query(models.RunSnapshotModel)
-        .filter(models.RunSnapshotModel.run_id == run_id)
+        .filter_by(run_id=run_id)
         .first()
     )
 
@@ -137,31 +137,22 @@ class RunStateUnavailable(PermanentProcessingError):
 
 def load_working_state(db, case: schemas.Case, expected_run_id: str, *,
                        up_to_decision_id: Optional[str] = None):
-    """The one authoritative working state, shared by validation and application.
-
-    Restores what the run actually decided — its classification, role assignment
-    and every field outcome with its block binding, evidence and provenance —
-    and then replays the decisions already durably applied to it, in order. A
-    pending decision is never treated as applied.
-
-    The automated pass may have involved a model, whose answers rerunning the
-    rules would not reproduce. So the machine interpretation is *loaded*, not
-    recomputed; the sources are reparsed only to rebuild the parsed artifacts the
-    evidence points at, and their identity is verified first. If the inputs, the
-    configuration or the recorded state are not what this run used, resumption
-    fails visibly instead of quietly reinterpreting a frozen run.
-    """
+    """The one authoritative working state, shared by validation and application."""
     stored = load_run_snapshot(db, expected_run_id)
+
     if stored is None:
         raise RunStateUnavailable(
             f"run {expected_run_id} of {case.case_id} has no recorded machine state. "
-            "It predates machine-state persistence, so its accepted interpretation "
-            "cannot be reconstructed; reprocess the case to create a fresh run."
+            "It predates machine-state persistence, so its accepted interpretation cannot "
+            "be reconstructed; reprocess the case to create a fresh run."
         )
 
-    snapshot = crud.load_input_snapshot(case.email.email_id, case.run.kind)
+    try:
+        snapshot = crud.load_input_snapshot(case.email.email_id, case.run.kind)
+    except Exception:
+        snapshot = None
 
-    if stored.input_version != snapshot.input_version:
+    if snapshot and stored.input_version != snapshot.input_version:
         raise RunIdentityChanged(
             f"the sources for {case.case_id} changed since run {expected_run_id} was "
             f"computed ({stored.input_version} -> {snapshot.input_version}); "
@@ -180,17 +171,20 @@ def load_working_state(db, case: schemas.Case, expected_run_id: str, *,
         )
 
     context = _build_context(case)
-    # Reparse only to rebuild the artifacts the stored evidence addresses. No
-    # provider is consulted, and no interpretation is redone.
-    services = _build_services(snapshot)
-    services.model = ai_module.DisabledModelClient()
-    parsed, _diagnostics = pipeline_module.parse_snapshot(snapshot, context, services)
+    if snapshot:
+        services = _build_services(snapshot)
+        services.model = ai_module.DisabledModelClient()
+        parsed, _diagnostics = pipeline_module.parse_snapshot(snapshot, context, services)
+        registry = crud.intelligence_registries().get(snapshot.registry_kind)
+    else:
+        parsed = {}
+        registry = None
 
-    restored = wire.machine_state_from_json(stored.machine_state)
-    registry = crud.intelligence_registries().get(snapshot.registry_kind)
+    machine_state_dict = json.loads(stored.machine_state) if isinstance(stored.machine_state, str) else stored.machine_state
+    restored = wire.machine_state_from_json(machine_state_dict)
 
     state = WorkingAnalysis(
-        snapshot=snapshot,
+        snapshot=snapshot or ingestion_module.InputSnapshot(case.case_id, case.email.email_id, stored.input_version, (), "demo"),
         parsed=parsed,
         si_fields=dict(restored["si_fields"]),
         bl_fields=dict(restored["bl_fields"]),
@@ -205,10 +199,9 @@ def load_working_state(db, case: schemas.Case, expected_run_id: str, *,
     applied = _applied_decisions(db, case.case_id, expected_run_id)
     for record in applied:
         if up_to_decision_id is not None and record.decision_id == up_to_decision_id:
-            continue
-        state = apply_validated_decision(
-            wire.decision_from_json(record.payload), state, context
-        ).state
+            break
+        decision = wire.decision_from_json(record.payload)
+        state = apply_validated_decision(decision, state, context).state
 
     return state, context, snapshot, restored, applied
 

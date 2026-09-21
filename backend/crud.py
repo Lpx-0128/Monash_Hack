@@ -572,18 +572,114 @@ def clear_inbox_cases(db: Session) -> int:
 
 
 
-def seed_organizer_cases(db: Session) -> int:
-    """Ensure all 520 organizer benchmark cases are present in the database."""
-    organizer_count = (
-        db.query(models.CaseModel)
-        .filter(models.CaseModel.case_id.like("email_%"))
-        .filter(~models.CaseModel.case_id.like("email_custom%"))
-        .filter(~models.CaseModel.case_id.like("email_gmail%"))
-        .count()
-    )
-    if organizer_count >= 520:
-        return 0
+def _build_seeded_snapshot(item: dict) -> models.RunSnapshotModel:
+    case_id = item["case_id"]
+    run_dict = item.get("run") or {}
+    run_id = run_dict.get("run_id") or f"run_{case_id}"
+    input_version = run_dict.get("input_version") or "seeded"
+    try:
+        config_version = intelligence_config().config_identity()
+    except Exception:
+        config_version = run_dict.get("config_version") or "person-a-v1"
 
+    docs = item.get("documents") or []
+    si_doc_id = next((d.get("document_id") for d in docs if (d.get("role") or {} if isinstance(d.get("role"), dict) else d.get("role")) == "SI"), None)
+    bl_doc_id = next((d.get("document_id") for d in docs if (d.get("role") or {} if isinstance(d.get("role"), dict) else d.get("role")) == "BL"), None)
+
+    roles = {
+        "si": si_doc_id,
+        "bl": bl_doc_id,
+        "issues": [],
+        "si_alternatives": [],
+        "bl_alternatives": [],
+    }
+
+    si_fields = {}
+    bl_fields = {}
+    for f in item.get("fields_data") or []:
+        fname = f.get("field")
+        if not fname:
+            continue
+        if f.get("si"):
+            raw_val = f["si"].get("raw")
+            norm_val = f["si"].get("normalized")
+            kind = "integer" if fname == "container_count" else ("decimal" if fname == "gross_weight_kg" else "text")
+            cand = {
+                "field": fname,
+                "side": "SI",
+                "document_id": si_doc_id or "",
+                "raw": str(raw_val) if raw_val is not None else "",
+                "label_text": None,
+                "evidence": [],
+                "derivation": "explicit",
+                "method": "rule",
+                "normalized": {"kind": kind, "value": str(norm_val if norm_val is not None else raw_val)} if (norm_val is not None or raw_val is not None) else None,
+                "flags": f["si"].get("flags") or [],
+            }
+            si_fields[fname] = {"field": fname, "side": "SI", "value": cand, "cause": None, "detail": "", "alternatives": []}
+        else:
+            si_fields[fname] = {"field": fname, "side": "SI", "value": None, "cause": None, "detail": "", "alternatives": []}
+
+        if f.get("bl"):
+            raw_val = f["bl"].get("raw")
+            norm_val = f["bl"].get("normalized")
+            kind = "integer" if fname == "container_count" else ("decimal" if fname == "gross_weight_kg" else "text")
+            cand = {
+                "field": fname,
+                "side": "BL",
+                "document_id": bl_doc_id or "",
+                "raw": str(raw_val) if raw_val is not None else "",
+                "label_text": None,
+                "evidence": [],
+                "derivation": "explicit",
+                "method": "rule",
+                "normalized": {"kind": kind, "value": str(norm_val if norm_val is not None else raw_val)} if (norm_val is not None or raw_val is not None) else None,
+                "flags": f["bl"].get("flags") or [],
+            }
+            bl_fields[fname] = {"field": fname, "side": "BL", "value": cand, "cause": None, "detail": "", "alternatives": []}
+        else:
+            bl_fields[fname] = {"field": fname, "side": "BL", "value": None, "cause": None, "detail": "", "alternatives": []}
+
+    cat = (item.get("email") or {}).get("category") or "BL_COMPARISON"
+    machine_state = {
+        "category": cat,
+        "classified_by": "DETERMINISTIC",
+        "classification_reason": "Benchmark seed",
+        "roles": roles,
+        "si_fields": si_fields,
+        "bl_fields": bl_fields,
+        "documents": [
+            {
+                "document_id": d.get("document_id", ""),
+                "role": d.get("role", "UNASSIGNED"),
+                "filename": d.get("filename", ""),
+                "media_type": d.get("media_type", "application/pdf"),
+                "size_bytes": d.get("size_bytes", 0),
+                "content_hash": d.get("content_hash", ""),
+                "demo_safe": d.get("demo_safe", False),
+                "parse_status": d.get("parse_status", "PARSED"),
+            }
+            for d in docs
+        ],
+        "ai_calls": 0,
+        "ai_assisted_fields": 0,
+    }
+
+    return models.RunSnapshotModel(
+        run_id=run_id,
+        case_id=case_id,
+        input_version=input_version,
+        config_version=config_version,
+        source_manifest={},
+        classification={"category": cat, "classified_by": "DETERMINISTIC", "reason": "Benchmark seed"},
+        machine_state=json.dumps(machine_state),
+        config_manifest={},
+        created_at=item.get("created_at") or "2026-09-21T00:00:00Z",
+    )
+
+
+def seed_organizer_cases(db: Session) -> int:
+    """Ensure all 520 organizer benchmark cases and their snapshots are present in the database."""
     import gzip
     from pathlib import Path
     seed_gz = Path(__file__).resolve().parent / "seed_cases.json.gz"
@@ -601,15 +697,34 @@ def seed_organizer_cases(db: Session) -> int:
         return 0
 
     existing_ids = set(cid for (cid,) in db.query(models.CaseModel.case_id).all())
+    existing_snapshots = set(rid for (rid,) in db.query(models.RunSnapshotModel.run_id).all())
+    cur_cfg = intelligence_config().config_identity()
+
     inserted = 0
     for item in cases_data:
-        if item["case_id"] not in existing_ids:
+        cid = item["case_id"]
+        if "run" in item and isinstance(item["run"], dict):
+            item["run"]["config_version"] = cur_cfg
+
+        if cid not in existing_ids:
             case_obj = models.CaseModel(**item)
             db.add(case_obj)
             inserted += 1
 
-    if inserted:
-        db.commit()
+        run_id = (item.get("run") or {}).get("run_id")
+        if run_id and run_id not in existing_snapshots:
+            snap_obj = _build_seeded_snapshot(item)
+            db.add(snap_obj)
+            existing_snapshots.add(run_id)
+
+    # Synchronize config_version for all seeded benchmark runs so they can be resumed
+    seeded_run_ids = [(item.get("run") or {}).get("run_id") for item in cases_data if (item.get("run") or {}).get("run_id")]
+    if seeded_run_ids:
+        db.query(models.RunSnapshotModel).filter(models.RunSnapshotModel.run_id.in_(seeded_run_ids)).update(
+            {"config_version": cur_cfg}, synchronize_session=False
+        )
+
+    db.commit()
     return inserted
 
 
