@@ -28,8 +28,11 @@ from .intelligence.types import SourceDataIssue
 from .database import engine, get_db, SessionLocal, init_db
 from .worker_loop import start_worker_thread, stop_worker_thread
 
-# Initialize database schema
+# Initialize database schema and ensure all 520 benchmark cases are seeded
 init_db()
+with SessionLocal() as _db:
+    crud.seed_organizer_cases(_db)
+
 
 
 @asynccontextmanager
@@ -868,13 +871,14 @@ def get_gmail_status():
 
 @api_router.post("/cases/clear", response_model=schemas.GmailClearResponse)
 def clear_all_cases(db: Session = Depends(get_db)):
-    """Delete every case and job from the database."""
+    """Reset cases to the 520 organizer benchmark cases, removing dynamically added ones."""
     count = crud.clear_all_cases(db)
     return schemas.GmailClearResponse(
         status="OK",
         deleted_count=count,
-        message=f"Successfully deleted all {count} case(s) from the database.",
+        message=f"Cleared {count} added case(s). Database reset to the 520 organizer benchmark cases.",
     )
+
 
 
 @api_router.post("/inbox/gmail/clear", response_model=schemas.GmailClearResponse)

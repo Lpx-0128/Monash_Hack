@@ -14,7 +14,7 @@ def get_case(db: Session, case_id: str):
     return db.query(models.CaseModel).filter(models.CaseModel.case_id == case_id).first()
 
 
-def get_cases(db: Session, skip: int = 0, limit: int = 100):
+def get_cases(db: Session, skip: int = 0, limit: int = 10_000):
     return db.query(models.CaseModel).offset(skip).limit(limit).all()
 
 
@@ -548,29 +548,76 @@ def update_job_status(db: Session, job_id: str, status: str, error: str = None):
 
 
 def clear_inbox_cases(db: Session) -> int:
-    """Delete all dynamically synced Gmail and mock composer cases and associated jobs."""
+    """Delete all dynamically synced Gmail and mock composer cases and associated child records."""
     cases_to_delete = (
         db.query(models.CaseModel)
         .filter(
             (models.CaseModel.case_id.like("case_email_gmail_%"))
             | (models.CaseModel.case_id.like("case_email_custom_%"))
+            | (models.CaseModel.case_id.like("email_gmail_%"))
+            | (models.CaseModel.case_id.like("email_custom_%"))
+            | (models.CaseModel.case_id.like("test_email_%"))
         )
         .all()
     )
-    count = len(cases_to_delete)
-    for c in cases_to_delete:
-        db.delete(c)
-    db.commit()
-    return count
+    case_ids = [c.case_id for c in cases_to_delete]
+    if case_ids:
+        db.query(models.AcceptedDecisionModel).filter(models.AcceptedDecisionModel.case_id.in_(case_ids)).delete(synchronize_session=False)
+        db.query(models.RunSnapshotModel).filter(models.RunSnapshotModel.case_id.in_(case_ids)).delete(synchronize_session=False)
+        db.query(models.JobModel).filter(models.JobModel.case_id.in_(case_ids)).delete(synchronize_session=False)
+        for c in cases_to_delete:
+            db.delete(c)
+        db.commit()
+    return len(case_ids)
+
+
+
+def seed_organizer_cases(db: Session) -> int:
+    """Ensure all 520 organizer benchmark cases are present in the database."""
+    organizer_count = (
+        db.query(models.CaseModel)
+        .filter(models.CaseModel.case_id.like("email_%"))
+        .filter(~models.CaseModel.case_id.like("email_custom%"))
+        .filter(~models.CaseModel.case_id.like("email_gmail%"))
+        .count()
+    )
+    if organizer_count >= 520:
+        return 0
+
+    import gzip
+    from pathlib import Path
+    seed_gz = Path(__file__).resolve().parent / "seed_cases.json.gz"
+    seed_json = Path(__file__).resolve().parent / "seed_cases.json"
+
+    cases_data = None
+    if seed_gz.exists():
+        with gzip.open(seed_gz, "rt", encoding="utf-8") as f:
+            cases_data = json.load(f)
+    elif seed_json.exists():
+        with open(seed_json, "r", encoding="utf-8") as f:
+            cases_data = json.load(f)
+
+    if not cases_data:
+        return 0
+
+    existing_ids = set(cid for (cid,) in db.query(models.CaseModel.case_id).all())
+    inserted = 0
+    for item in cases_data:
+        if item["case_id"] not in existing_ids:
+            case_obj = models.CaseModel(**item)
+            db.add(case_obj)
+            inserted += 1
+
+    if inserted:
+        db.commit()
+    return inserted
 
 
 def clear_all_cases(db: Session) -> int:
-    """Delete every case and associated job from the database."""
-    all_cases = db.query(models.CaseModel).all()
-    count = len(all_cases)
-    for c in all_cases:
-        db.delete(c)
-    db.commit()
-    return count
+    """Delete dynamically added cases and ensure all 520 organizer benchmark cases are retained."""
+    deleted_count = clear_inbox_cases(db)
+    seed_organizer_cases(db)
+    return deleted_count
+
 
 

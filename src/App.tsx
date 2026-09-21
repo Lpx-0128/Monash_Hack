@@ -1846,12 +1846,12 @@ function Cases({
     }
   }
   async function handleClearAll() {
-    if (!window.confirm("Are you sure you want to delete ALL cases from the database? This cannot be undone.")) return;
+    if (!window.confirm("Are you sure you want to clear all added/synced cases and reset to the 520 organizer benchmark cases?")) return;
     setClearingAll(true);
     setClearAllNotice(null);
     try {
       const res = await api.casesClear();
-      setClearAllNotice(`Cleared ${res.deleted_count} case(s).`);
+      setClearAllNotice(res.message || `Reset complete. Retained all 520 organizer benchmark cases.`);
       retry();
     } catch (e) {
       setCreateError(e as Error);
@@ -1884,8 +1884,8 @@ function Cases({
             onClick={() => void handleClearAll()}
             style={{ display: "inline-flex", alignItems: "center", gap: "8px" }}
           >
-            <Trash2 size={16} aria-hidden="true" />
-            {clearingAll ? "Clearing…" : "Clear All Cases"}
+            <RotateCcw size={16} aria-hidden="true" />
+            {clearingAll ? "Resetting…" : "Reset to 520 Benchmark Cases"}
           </button>
         </div>
       </div>
