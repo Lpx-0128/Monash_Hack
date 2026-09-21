@@ -5,6 +5,7 @@ uvicorn==0.53.0
 pydantic==2.13.5
 sqlalchemy==2.0.54
 httpx==0.28.1
+python-multipart>=0.0.9
 
 # Person A document parsing.
 pypdf==6.19.0          # page text extraction, layout mode, image-only detection
