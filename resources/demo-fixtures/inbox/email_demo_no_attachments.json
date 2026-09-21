@@ -1,0 +1,7 @@
+{
+  "email_id": "email_demo_no_attachments",
+  "from": "demo.sender@example.invalid",
+  "subject": "Please check SI vs draft BL - DEMO-BK-00044",
+  "body": "Dear Team,\n\nPlease compare the SI and draft BL for DEMO-BK-00044 and confirm (the attachments appear to have been dropped).\n\nRegards,\nDemo Desk\n",
+  "attachments": []
+}

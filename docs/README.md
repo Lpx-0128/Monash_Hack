@@ -5,6 +5,8 @@ These stable paths contain the current authoritative documents:
 - [Shared System Contract](./shared-system-contract.md) — v2.1.1; authoritative for both PRDs.
 - [PRD 1 — Backend](./prd-1-backend.md) — v2.1.1-aligned.
 - [PRD 2 — Interaction](./prd-2-interaction.md) — v2.1.1-aligned; Hermes selected for Telegram.
+- [Person A — implementation](./person-a-implementation.md) — document intelligence: what it does, what it refuses to guess, measured behaviour and limitations.
+- [Person A — integration handoff](./person-a-integration.md) — the callable boundary for B, the demo fixtures for C, changes made in shared code, and the blockers still open.
 
 Versions live inside the documents. Edit these files in future documentation PRs rather than introducing a new filename for every revision. Redundant root-level document pointers have been removed. Git history preserves previous content.
 

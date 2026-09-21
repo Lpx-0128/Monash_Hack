@@ -1,0 +1,7 @@
+{
+  "email_id": "email_demo_needs_model",
+  "from": "demo.sender@example.invalid",
+  "subject": "DEMO-BK-00052 follow up",
+  "body": "Dear Team,\n\nRegarding DEMO-BK-00052 - the paperwork you sent through yesterday against what the customer originally asked for. Something is off between the two and we would like your read before we go back to them.\n\nRegards,\nDemo Desk\n",
+  "attachments": []
+}
