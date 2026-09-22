@@ -11,49 +11,15 @@ Harbor automates this pipeline end-to-end using a **deterministic-first architec
 ## Program Flow & Architecture
 
 ### 1. Backend Processing Flow
-```mermaid
-flowchart TD
-    subgraph Ingestion ["1. Intake & Ingestion"]
-        A[Gmail IMAP / Multipart Upload] --> B[Immutable Case & Job Creation]
-        B --> C[Durable Worker]
-        C --> D[Run Snapshot\nHashes & Frozen Assessment]
-    end
-
-    subgraph Processing ["2. Classification & Parsing"]
-        D --> E[FastAPI Backend]
-        E --> F[Deterministic Classification Rules]
-        F -. Optional Fallback .-> F_AI[Gemini 3.5 Flash-Lite]
-        F --> G[Document Role Resolution\nIdentify SI & BL]
-        G --> H[Multi-Format Parsers\nPDF, DOCX, XLSX, TXT]
-        H --> I[Seven Canonical Fields]
-        I --> J[Deterministic Extraction]
-        J -. Optional Fallback .-> J_AI[Gemini 3.5 Flash-Lite]
-    end
-
-    subgraph Verification ["3. Grounding & Verification"]
-        J --> K[Normalisation]
-        K --> L[Outcome Roll-up]
-        L --> M[G1–G3 Evidence Guardrails\nByte-Exact Locators]
-        M --> N[Deterministic SI-vs-BL Comparison]
-    end
-
-    subgraph Outcomes ["4. Operational Outcomes"]
-        N --> O1["🟢 OK\nAll 7 fields match"]
-        N --> O2["🔴 MISMATCH\nComparable values differ"]
-        N --> O3["🟠 NEEDS_REVIEW\nMissing / Ambiguous"]
-        O3 --> P[Human Decision]
-        P --> Q[Backend Validation & Recompute]
-    end
-
-    subgraph Audit ["5. Persistence & Audit Layer"]
-        R[(SQLite WAL & SQLAlchemy Models\nCases, Jobs, Snapshots, Reviews, SHA-256 Manifests)]
-    end
-    
-    Ingestion -.-> Audit
-    Processing -.-> Audit
-    Verification -.-> Audit
-    Outcomes -.-> Audit
-```
+* **Intake & Ingestion**: Ingests emails via Gmail IMAP SSL or multipart uploads, stores attachments on the filesystem, creates immutable case records, enqueues background worker jobs, and freezes input snapshots with SHA-256 content manifests.
+* **Classification & Role Resolution**: Executes deterministic classification rules (with optional Gemini 3.5 Flash-Lite fallback for ambiguous subject lines), resolves document roles (identifying SI and BL), and invokes multi-format parsers (`.pdf`, `.docx`, `.xlsx`, `.txt`).
+* **Extraction & Normalisation**: Extracts all 7 canonical fields using rule-based pattern matching (with AI fallback) and standardizes values (e.g. UN/LOCODE port codes, metric kilogram conversions, case folding).
+* **G1–G3 Evidence Guardrails**: Validates that every extracted quote exists verbatim in source text (Gate 1), matches field semantics (Gate 2), and arithmetically derives the exact canonical value (Gate 3) — ensuring zero hallucinations.
+* **Deterministic Comparison & Outcomes**: Compares SI against BL side-by-side to produce three deterministic operational verdicts:
+  * 🟢 **`OK`**: All seven canonical fields match cleanly.
+  * 🔴 **`MISMATCH`**: Comparable values differ (flags only the deviating fields with SI vs BL side-by-side).
+  * 🟠 **`NEEDS_REVIEW`**: Missing attachments, unreadable text, or ambiguous discrepancies escalate to a human operator.
+* **Persistence & Audit Layer**: Backed by SQLite in WAL mode with SQLAlchemy models (`cases`, `jobs`, `run_snapshots`, `reviews`, `accepted_decisions`), providing ACID-compliant, crash-resilient state transitions and complete event timelines.
 
 ### 2. End-to-End System Interaction Flow
 1. **Email enters the system**: The user triggers Gmail synchronization through the web inbox or creates a mock email with attachments. Gmail synchronization reaches the Python backend, which uses `imaplib` over IMAP SSL to retrieve messages. The composer sends a multipart upload through the HTTP API.
