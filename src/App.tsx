@@ -250,6 +250,10 @@ export function App({
     [controlMessage, setControlMessage] = useState(""),
     [fault, setFault] = useState(initialFault),
     [decisionFault, setDecisionFault] = useState(initialDecisionFault);
+  const activeTelegramUrl =
+    telegramUrl ||
+    (import.meta as any).env?.VITE_TELEGRAM_URL ||
+    "https://t.me/IMNaughty_bot";
   const retry = () => setRefresh((v) => v + 1),
     isCases = path.startsWith("/cases"),
     isInsights = path.startsWith("/insights"),
@@ -347,6 +351,17 @@ export function App({
             <FileUp size={19} aria-hidden="true" />
             Mock Composer
           </Link>
+          <a
+            href={activeTelegramUrl}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="nav-link"
+            style={{ color: "var(--accent, #0088cc)" }}
+            title="Open Telegram Human-in-the-Loop Bot (@IMNaughty_bot)"
+          >
+            <Send size={19} aria-hidden="true" />
+            Telegram Bot
+          </a>
         </nav>
         <div className="sidebar-bottom">
           <ShieldCheck size={22} aria-hidden="true" />
@@ -416,7 +431,24 @@ export function App({
               <span />
               {isSimulation ? "SYNTHETIC DEMO" : "LIVE API"}
             </span>
-            {telegramUrl && <a className="button primary" href={telegramUrl} target="_blank" rel="noopener noreferrer">Continue in Telegram</a>}
+            <a
+              className="button primary"
+              href={activeTelegramUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              style={{
+                display: "inline-flex",
+                alignItems: "center",
+                gap: "6px",
+                backgroundColor: "#0088cc",
+                borderColor: "#0088cc",
+                color: "#fff",
+              }}
+              title="Open Harbor Review Telegram Bot (@IMNaughty_bot)"
+            >
+              <Send size={15} aria-hidden="true" />
+              Telegram Bot
+            </a>
             {isSimulation && !hosted && (
               <button
                 className="button quiet"
@@ -536,7 +568,7 @@ export function App({
         )}
         <main id="main" tabIndex={-1}>
           {path.split("?")[0] === "/" ? (
-            <Overview refresh={refresh} retry={retry} />
+            <Overview refresh={refresh} retry={retry} telegramUrl={activeTelegramUrl} />
           ) : path.split("?")[0] === "/insights" ? (
             <Insights refresh={refresh} retry={retry} />
           ) : path.split("?")[0] === "/architecture" ? (
@@ -740,7 +772,15 @@ function ArchitectureRationaleView() {
     </div>
   );
 }
-function Overview({ refresh, retry }: { refresh: number; retry: () => void }) {
+function Overview({
+  refresh,
+  retry,
+  telegramUrl = "https://t.me/IMNaughty_bot",
+}: {
+  refresh: number;
+  retry: () => void;
+  telegramUrl?: string;
+}) {
   const { data, error, loading, updated } = usePoll(
     `overview:${refresh}`,
     async (signal) => {
@@ -842,6 +882,95 @@ function Overview({ refresh, retry }: { refresh: number; retry: () => void }) {
             <Link to="/cases?has_open_review=true" className="button primary">
               Review queue <ArrowRight size={16} aria-hidden="true" />
             </Link>
+          </div>
+
+          <div
+            className="telegram-bot-card"
+            style={{
+              marginBottom: "1.5rem",
+              padding: "1.1rem 1.25rem",
+              borderRadius: "10px",
+              border: "1px solid rgba(0, 136, 204, 0.28)",
+              background: "linear-gradient(110deg, rgba(0, 136, 204, 0.08), rgba(0, 136, 204, 0.02))",
+              display: "flex",
+              justifyContent: "space-between",
+              alignItems: "center",
+              gap: "1.25rem",
+              flexWrap: "wrap",
+            }}
+          >
+            <div style={{ display: "flex", alignItems: "flex-start", gap: "12px", minWidth: "260px", flex: 1 }}>
+              <div
+                style={{
+                  width: "40px",
+                  height: "40px",
+                  borderRadius: "50%",
+                  background: "#0088cc",
+                  color: "#fff",
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  flexShrink: 0,
+                  boxShadow: "0 2px 8px rgba(0, 136, 204, 0.35)",
+                }}
+              >
+                <Send size={18} aria-hidden="true" style={{ transform: "translate(-1px, 1px)" }} />
+              </div>
+              <div>
+                <div style={{ display: "flex", alignItems: "center", gap: "8px", flexWrap: "wrap" }}>
+                  <strong style={{ fontSize: "1rem", color: "var(--text-strong, #111)" }}>
+                    Telegram Human-in-the-Loop Bot
+                  </strong>
+                  <span
+                    style={{
+                      fontSize: "0.75rem",
+                      fontWeight: 600,
+                      padding: "2px 8px",
+                      borderRadius: "12px",
+                      background: "rgba(0, 136, 204, 0.15)",
+                      color: "#0088cc",
+                    }}
+                  >
+                    @IMNaughty_bot
+                  </span>
+                  <span
+                    style={{
+                      fontSize: "0.72rem",
+                      fontWeight: 500,
+                      padding: "2px 7px",
+                      borderRadius: "12px",
+                      background: "rgba(22, 163, 74, 0.12)",
+                      color: "#16a34a",
+                    }}
+                  >
+                    Hermes Agent Gateway
+                  </span>
+                </div>
+                <p style={{ margin: "0.3rem 0 0", color: "var(--text-muted, #555)", fontSize: "0.875rem", lineHeight: "1.4" }}>
+                  Perform remote document reviews on mobile or desktop via Telegram. Receive real-time discrepancy alerts, inspect byte-grounded source evidence, select candidate options, or submit natural-language overrides.
+                </p>
+              </div>
+            </div>
+            <a
+              href={telegramUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="button primary"
+              style={{
+                backgroundColor: "#0088cc",
+                borderColor: "#0088cc",
+                color: "#fff",
+                display: "inline-flex",
+                alignItems: "center",
+                gap: "8px",
+                whiteSpace: "nowrap",
+                fontWeight: 600,
+                padding: "0.55rem 1.1rem",
+              }}
+            >
+              <Send size={15} aria-hidden="true" />
+              Open in Telegram <ArrowRight size={15} aria-hidden="true" />
+            </a>
           </div>
 
           <RecentCases cases={cases} />
